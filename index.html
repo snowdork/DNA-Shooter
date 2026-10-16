@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#080e20" />
+    <meta name="description" content="Build a DNA chain, pair by pair, and grow your own imaginative life form. A free laptop browser game about complementary bases." />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <title>Mutagon · DNA Mutation Lab</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script>
+      if (location.protocol === 'file:') {
+        document.getElementById('app').innerHTML = '<main style="max-width:600px;margin:10vh auto;padding:28px;font:16px/1.7 system-ui;color:#e4eef9;background:#101e2a;border-radius:16px"><h1 style="color:#b9ef9c">Open Mutagon locally</h1><p>This game needs a local web server to load its JavaScript modules.</p><p>In the DNA-Shooter project folder, run:</p><pre style="padding:16px;background:#070c18;overflow:auto">npm run preview</pre><p>Keep the terminal open, then visit the local address it prints, normally <a style="color:#b9ef9c" href="http://127.0.0.1:4173/">http://127.0.0.1:4173/</a>.</p></main>';
+        document.body.style.background = '#070c18';
+      }
+    </script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
