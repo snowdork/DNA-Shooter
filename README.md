@@ -1,6 +1,6 @@
 # DNA Shooter
 
-A TypeScript + Phaser browser prototype: pair A with T or C with G, lock an empty moving rung, then fire to fill it. Complete 20 four-pair segments to grow a fictional creature. Complementary base pairing is real; creature adaptations are imaginative biology.
+A TypeScript + Phaser browser game: click complementary side shooters in order to fill a vertical DNA stream. Link at least one pair before each chromosome exits the bottom. Linked chromosomes recirculate safely until all four rungs are filled; complete 30 chromosomes to win. Every pair transforms your caged Mutagon. Complementary base pairing is real; creature adaptations are imaginative biology.
 
 ## Start and play locally
 
@@ -12,9 +12,9 @@ npm ci
 npm run dev
 ```
 
-Run `npm ci` on first setup or after dependency changes. Keep the terminal open and visit **[http://127.0.0.1:5173/](http://127.0.0.1:5173/)**, then click **Start creating**. If Vite prints a different port, use its printed URL. Press **Ctrl+C** in the terminal to stop the local server. On another computer, use your clone's actual path.
+Run `npm ci` on first setup or after dependency changes. Keep the terminal open and visit **[http://127.0.0.1:5173/](http://127.0.0.1:5173/)**, then click **Start experiment**. If Vite prints a different port, use its printed URL. Press **Ctrl+C** in the terminal to stop the local server. On another computer, use your clone's actual path.
 
-Choose two complementary letters → click an empty rung to lock it → click that rung again to fire. Each shot needs a fresh pair selection.
+Click A then T, T then A, C then G, or G then C to prepare a pair, then click an empty chromosome rung to fire. Order changes the mutation. Each shot needs a fresh pair selection.
 
 ## Guides
 
@@ -36,3 +36,7 @@ Choose two complementary letters → click an empty rung to lock it → click th
 Production hosting serves the **contents of `dist/`** as static files. The game needs no server-side Node process or database. See the admin guide before deploying.
 
 Documents under `doc/design/` retain design history and future plans. The user and admin guides describe the current playable prototype.
+
+## Opening the production build in Firefox
+
+Open the build through a local web server. Double-clicking `dist/index.html` opens a `file://` address, which blocks JavaScript modules in Firefox. From the project folder, run `npm run preview`, keep the terminal open, and visit the printed URL (normally http://127.0.0.1:4173/). Run `npm run build` first after changing the game.
