@@ -67,12 +67,12 @@ The test server uses strict port `4174`; stop any other process using it before 
 
 For a manual check, run `npm run preview`, open its printed URL, and verify:
 
-1. A then C gives a pairing hint without firing.
-2. A then T followed by an empty-rung click locks without firing. A later click fires one pair and awards 100 points.
-3. Four placements complete one segment, award a 400-point bonus, and add one adaptation. A new segment starts from the left after a short transition.
+1. Click A, then its UP holder. Attempting to put C in that station is rejected without firing. Place T in DOWN to make AT.
+2. Click an empty chain or drag the READY pair onto it. The shooters aim, fire one pair, and award 100 points when it lands.
+3. Four placements complete one quadra-chrome, award a 400-point bonus, and add one adaptation. It shakes and sparkles before drifting down to the master chain; the next set enters from above. Any empty chain reaching the bottom ends the run, even with other chains filled.
 4. Pause freezes the chain and projectiles. A queued, unlaunched shot is cancelled and needs a fresh fire action after resuming.
 5. Export, restart, and load restore progress and creature appearance. Loading leaves play paused.
-6. Keyboard controls, reduced motion, and resizing remain usable. A full run has 80 placements, 20 adaptations, and 16,000 points.
+6. Keyboard controls, reduced motion, and resizing remain usable. With the current 10-quadra-chrome goal, a full run has 40 placements, 10 adaptations, and 8,000 points. New games begin with a small green glob and draw random mutations as it grows.
 
 ## Deploy to a VPS
 
@@ -127,11 +127,11 @@ To roll back, point `current` back to the previous complete release. Preserve ne
 
 Keep release archives, the source revision and lockfile used for each build, and VPS virtual-host/TLS configuration. There is no server-side player progress to back up. Tell players to export before restarting or refreshing; live progress exists only in browser memory.
 
-Creation exports currently use model version **1** and contain the seed and ordered placements. The loader validates the history and accepts files up to **32,768 bytes (32 KiB)**. Selection, locks, in-flight shots, animation time, and settings are not saved. Preserve version compatibility when changing creation rules; unsupported files are rejected rather than migrated automatically.
+Creation exports currently use model version **1** and contain the seed, mutation rules version, and ordered placements. Mutation version **3** draws random traits and colors reproducibly; versions **1** and **2** retain their original sequential rules. The loader validates the history and accepts files up to **32,768 bytes (32 KiB)**. Selection, locks, in-flight shots, animation time, and settings are not saved. Preserve version compatibility when changing creation rules; unsupported files are rejected rather than migrated automatically.
 
 ## Performance and troubleshooting
 
-The renderer caches the background and helix, reuses target coordinates, limits animation to 60 frames per second, and sleeps while paused or after completion feedback. Hidden tabs pause and cancel queued shots. The adaptation list updates when its contents change. These reduce browser work; the VPS serves static files.
+The renderer caches the background, reuses target coordinates and helix point buffers, limits animation to 60 frames per second, and sleeps while paused or after completion feedback. Creature drawing groups and motion profiles are rebuilt only when mutation history changes, avoiding repeated history scans each frame. The DNA ticker updates changed rows; mutation and adaptation histories append new entries. Unchanged canvas sizes skip texture allocation. Hidden tabs pause and cancel queued shots. These reduce browser work; the VPS serves static files.
 
 Phaser is a separately hashed engine chunk. Its first download remains roughly 380 KB compressed; repeat visits and game-code updates can reuse the cached engine. The build currently reports a large-chunk warning for Phaser; that warning alone is not a failed build.
 

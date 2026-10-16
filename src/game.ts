@@ -1,12 +1,16 @@
 import Phaser from 'phaser';
 import { LabAudio } from './audio';
-import { creatureMotion } from './motion';
-import { BASES, Creation, Controls, type Base, type Mutation } from './model';
+import { animateCreature } from './motion';
+import { creatureState } from './creature-state';
+import { COLORS, belongsToSide, type Side } from './bases';
+import { BASES, Creation, Controls, missedChain, SLOTS, TOTAL_SEGMENTS, type Base, type Mutation } from './model';
 
 export const W = 1280;
 export const H = 650;
-export const COLORS: Record<Base, string> = { A: '#ffbc4c', T: '#ff6bd9', C: '#45dfff', G: '#b18aff' };
 const ENTRY_OFFSET = -290;
+const EXIT_Y = 580;
+const CELEBRATION_SECONDS = 1;
+const COMPLETION_DRIFT_SPEED = 250;
 const GUN_X = [47, 119, 640, 712];
 const SHOOTER_SCALE = .52;
 export const SHOOTER_RADIUS = 43 * SHOOTER_SCALE;
@@ -15,6 +19,7 @@ export interface GameHooks {
   notice: (text: string) => void;
 }
 type Point = { x: number; y: number };
+export type CompletionPhase = 'idle' | 'celebrating' | 'drifting';
 
 /** Phaser owns the loop and scaling; the creation model remains renderer-independent. */
 export class Field extends Phaser.Scene {
@@ -29,47 +34,80 @@ export class Field extends Phaser.Scene {
   aligned = false;
   angles = GUN_X.map(() => -Math.PI / 2);
   transition = 0;
+  celebration = 0;
+  linkedSegment: number | null = null;
   shownSegment = 0;
   burst = 0;
   shotTime = 0;
   shotOrigins: Point[] = [];
+  aspectCorrection = 1;
+  private dropTarget: number | null = null;
   private frame!: Phaser.Textures.CanvasTexture;
+  private frameImage!: Phaser.GameObjects.Image;
   private ctx!: CanvasRenderingContext2D;
   private hooks: GameHooks;
   private lastReady = false;
   private background!: HTMLCanvasElement;
-  private slotPositions: Point[] = Array.from({ length: 4 }, () => ({ x: 0, y: 0 }));
+  private slotPositions: Point[] = Array.from({ length: SLOTS }, () => ({ x: 0, y: 0 }));
+  private strandPoints: Point[][] = Array.from({ length: 2 }, () => Array.from({ length: 150 }, () => ({ x: 0, y: 0 })));
 
   constructor(creation: Creation, hooks: GameHooks) {
     super('CreationField'); this.creation = creation; this.hooks = hooks;
     this.shownSegment = creation.active;
   }
+  get completionPhase(): CompletionPhase {
+    return !this.transition ? 'idle' : this.celebration > 0 ? 'celebrating' : 'drifting';
+  }
   create(): void {
     this.frame = this.textures.createCanvas('field', W, H)!;
     this.ctx = this.frame.context;
-    this.add.image(0, 0, 'field').setOrigin(0);
+    this.frameImage = this.add.image(0, 0, 'field').setOrigin(0);
     this.background = this.cacheLayer(W, H, () => this.drawBackground());
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.resizeField, this);
+    this.resizeField();
 
     this.game.events.once(Phaser.Core.Events.POST_RENDER, () => {
       this.scale.getParentBounds(); this.scale.refresh();
       if (this.paused) this.game.loop.sleep();
     });
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (pointer.x < 184 || pointer.x > 576) return;
-      const slot = this.positions().findIndex(p => Math.abs(p.x - pointer.x) < this.helixRadius(p.y) + 12 && Math.abs(p.y - pointer.y) < 40);
-      this.target(slot < 0 ? null : slot);
+      const x = pointer.x * W / this.scale.gameSize.width;
+      const y = pointer.y * H / this.scale.gameSize.height;
+      if (x < 184 || x > 576) return;
+      this.target(this.chainAt(x, y));
     });
     this.draw();
+  }
+  private resizeField(): void {
+    const { width, height } = this.scale.gameSize;
+    if (this.frame.width === width && this.frame.height === height) return;
+    this.aspectCorrection = (width / W) / (height / H);
+    this.frame.setSize(width, height);
+    this.frameImage.setSizeToFrame().setDisplaySize(width, height);
+    this.repaint(); this.hooks.changed();
+  }
+  chainAt(x: number, y: number, emptyOnly = false): number | null {
+    if (x < 184 || x > 576 || y < 34 || y >= EXIT_Y) return null;
+    const slot = this.positions().findIndex((p, i) => p.y >= 49 && p.y < EXIT_Y
+      && Math.abs(p.x - x) < this.helixRadius(p.y) + 12 && Math.abs(p.y - y) < 40
+      && (!emptyOnly || !this.creation.segments[this.creation.active][i]));
+    return slot < 0 ? null : slot;
+  }
+  highlightDrop(slot: number | null): void {
+    if (this.dropTarget === slot) return;
+    this.dropTarget = slot;
+    if (this.paused) this.repaint();
   }
   reset(creation: Creation): void {
     this.labAudio.setActive(false);
     this.creation = creation; this.failed = false; this.controls.cancel(); this.offset = ENTRY_OFFSET; this.elapsed = 0;
-    this.shownSegment = creation.active; this.transition = 0; this.burst = 0;
+    this.shownSegment = creation.active; this.transition = 0; this.celebration = 0; this.linkedSegment = null; this.burst = 0;
     this.aligned = false; this.lastReady = false; this.shotTime = 0; this.angles.fill(-Math.PI / 2);
+    this.dropTarget = null; this.shotOrigins = [];
     this.repaint(); this.hooks.changed();
   }
   setPause(value: boolean): void {
-    if (!value && (this.failed || this.creation.done)) return;
+    if (!value && (this.failed || this.creation.done && !this.transition)) return;
     this.paused = value;
     this.labAudio.setActive(!value);
     this.controls.queued = false;
@@ -89,7 +127,7 @@ export class Field extends Phaser.Scene {
   choose(base: Base): void {
     if (this.paused || this.creation.done || this.failed || this.transition) return;
     this.hooks.notice(this.controls.choose(base));
-    if (this.controls.pair) this.hooks.notice(`${this.controls.pair} ready — click an empty chromosome rung to fire.`);
+    if (this.controls.pair) this.hooks.notice(`${this.controls.pair} ready — click an empty quadra-chrome chain to fire.`);
     this.hooks.changed();
   }
   assemble(base: Base, position: 0 | 1): boolean {
@@ -105,10 +143,10 @@ export class Field extends Phaser.Scene {
       this.repaint(); this.hooks.changed();
     }
   }
-  clearSide(side: 'at' | 'cg'): void {
+  clearSide(side: Side): void {
     if (this.controls.flight) return;
     const first = this.controls.selected[0];
-    if (first && (side === 'at' ? ['A', 'T'] : ['C', 'G']).includes(first)) {
+    if (first && belongsToSide(first, side)) {
       this.controls.cancel(); this.aligned = false;
       this.hooks.notice(`${side.toUpperCase()} preview cleared. Choose a new UP base.`);
       this.repaint(); this.hooks.changed();
@@ -125,7 +163,7 @@ export class Field extends Phaser.Scene {
   launcherX(base: Base): number { return GUN_X[BASES.indexOf(base)]; }
   launcherY(_base: Base): number { return 420; }
   positions(): Point[] {
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < SLOTS; i++) {
       this.slotPositions[i].y = 130 + i * 88 + this.offset;
       this.slotPositions[i].x = this.helixCenter(this.slotPositions[i].y);
     }
@@ -139,31 +177,34 @@ export class Field extends Phaser.Scene {
     this.labAudio.tick(dt);
     if (!this.transition && !this.creation.done) this.offset = this.offset < 0 ? Math.min(0, this.offset + dt * 170) : this.offset + dt * (6 + this.creation.completed * .12);
     this.burst = Math.max(0, this.burst - dt);
-    if (this.transition > 0) {
-      this.offset += dt * 250;
-      this.transition = Math.max(0, this.transition - dt);
-      if (!this.transition) {
-        this.shownSegment = this.creation.active; this.offset = ENTRY_OFFSET;
-        this.hooks.notice('Empty chromosome approaching the canal. Select a pair, then click a rung.'); this.hooks.changed();
+    this.advanceTransition(dt);
+    if (!this.transition && !this.creation.done) {
+      const missed = missedChain(this.creation.segments[this.shownSegment], this.positions().map(p => p.y), EXIT_Y);
+      if (missed !== null) {
+        this.labAudio.finish(false);
+        this.failed = true; this.controls.cancel(); this.paused = true; this.dropTarget = null;
+        this.hooks.notice(`Containment failed: empty chain ${missed + 1} of the quadra-chrome reached the bottom. Restart required.`);
+        this.draw(); this.hooks.changed(); this.game.loop.sleep(); return;
       }
     }
+    const selected = this.controls.selected;
     const lock = this.controls.target;
     this.aligned = lock !== null;
     if (lock !== null) {
       const p = this.positions()[lock];
-      if (p.y < 105 || p.y > 580) this.aligned = false;
+      if (p.y < 49 || p.y >= EXIT_Y) this.aligned = false;
       GUN_X.forEach((x, i) => {
-        if (!this.controls.selected.includes(BASES[i])) return;
-        const desired = Math.atan2(p.y - this.launcherY(BASES[i]), p.x - x);
+        if (!selected.includes(BASES[i])) return;
+        const desired = Math.atan2((p.y - this.launcherY(BASES[i])) / this.aspectCorrection, p.x - x);
         const diff = Phaser.Math.Angle.Wrap(desired - this.angles[i]);
         this.angles[i] += this.reduced ? diff : Math.max(-dt * 5, Math.min(dt * 5, diff));
         if (Math.abs(diff) > .035 && !this.reduced) this.aligned = false;
       });
     }
     if (this.aligned !== this.lastReady) { this.lastReady = this.aligned; this.hooks.changed(); }
-    const origins = this.controls.queued && this.aligned ? this.controls.selected.map(base => {
+    const origins = this.controls.queued && this.aligned ? selected.map(base => {
       const i = BASES.indexOf(base);
-      return { x: GUN_X[i] + Math.cos(this.angles[i]) * 78 * SHOOTER_SCALE, y: this.launcherY(BASES[i]) + Math.sin(this.angles[i]) * 78 * SHOOTER_SCALE };
+      return { x: GUN_X[i] + Math.cos(this.angles[i]) * 78 * SHOOTER_SCALE, y: this.launcherY(BASES[i]) + Math.sin(this.angles[i]) * 78 * SHOOTER_SCALE * this.aspectCorrection };
     }) : [];
     if (this.controls.launch(this.aligned)) {
       this.labAudio.shoot();
@@ -175,34 +216,43 @@ export class Field extends Phaser.Scene {
         const flight = this.controls.flight;
         const before = this.creation.completed;
         this.creation.place(flight.slot, flight.pair);
-        this.labAudio.grow(this.creation.completed > before, ['AT', 'TA', 'CG', 'GC'].indexOf(flight.pair));
+        const completedPattern = this.creation.completed > before ? this.creation.adaptations.at(-1)!.pattern : undefined;
+        this.labAudio.grow(flight.pair, completedPattern);
         if (this.creation.done) this.labAudio.finish(true);
         this.controls.cancel(); this.burst = .7;
         const latestMutation = this.creation.mutations.at(-1)!;
         this.hooks.notice(`Mutation ${latestMutation.id}: ${latestMutation.name} — ${flight.pair} on rung ${flight.slot + 1}.`);
         if (this.creation.completed > before) {
-          if (!this.creation.done) this.transition = 1.6;
+          this.celebration = CELEBRATION_SECONDS;
+          this.transition = CELEBRATION_SECONDS + (H + 44 - this.positions()[0].y) / COMPLETION_DRIFT_SPEED;
+          this.linkedSegment = null; this.dropTarget = null;
+          this.hooks.notice(`Quadra-chrome complete! ${latestMutation.name} mutation — shaking and glimmering with sparks.`);
         }
         this.hooks.changed();
       }
     }
-    if (!this.transition && !this.creation.done && this.positions()[3].y > 580) {
-      if (this.controls.flight) {
-        // Resolve a launched shot before deciding whether the chromosome is empty.
-        this.offset = 186;
-      } else if (this.creation.linked) {
-        this.offset = ENTRY_OFFSET; this.controls.cancel(); this.aligned = false;
-        this.hooks.notice('Linked chromosome preserved — returning to the top. Finish its remaining rungs.');
-        this.hooks.changed();
-      } else {
-        this.labAudio.finish(false);
-        this.failed = true; this.controls.cancel(); this.paused = true;
-        this.hooks.notice('Containment failed: a completely empty chromosome escaped. Restart required.');
-        this.draw(); this.hooks.changed(); this.game.loop.sleep(); return;
-      }
-    }
     this.draw();
-    if (this.creation.done && !this.burst) this.game.loop.sleep();
+    if (this.creation.done && !this.transition && !this.burst) this.game.loop.sleep();
+  }
+  private advanceTransition(dt: number): void {
+    if (!this.transition) return;
+    const celebrating = this.celebration > 0;
+    const heldTime = Math.min(dt, this.celebration);
+    this.celebration = Math.max(0, this.celebration - dt);
+    // Hold the whole set for its celebration, then let all four pairs drift out together.
+    this.offset += (dt - heldTime) * COMPLETION_DRIFT_SPEED;
+    this.transition = Math.max(0, this.transition - dt);
+    if (!this.transition) {
+      this.linkedSegment = this.shownSegment;
+      if (this.creation.done) this.hooks.notice('Genome complete! All quadra-chromes have joined the master chain.');
+      else {
+        this.shownSegment = this.creation.active; this.offset = ENTRY_OFFSET;
+        this.hooks.notice('New quadra-chrome approaching the canal. Fill all four chains before they reach the bottom.');
+      }
+      this.hooks.changed();
+    } else if (celebrating && !this.celebration) {
+      this.hooks.notice('Quadra-chrome complete — drifting down to the master chain…'); this.hooks.changed();
+    }
   }
   private round(x: number, y: number, w: number, h: number, radius = 12): void {
     this.ctx.beginPath(); this.ctx.roundRect(x, y, w, h, radius);
@@ -216,9 +266,10 @@ export class Field extends Phaser.Scene {
     const c = this.ctx; c.beginPath(); c.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
     c.fillStyle = fill; c.fill(); if (stroke) { c.strokeStyle = stroke; c.lineWidth = 2; c.stroke(); }
   }
-  private text(text: string, x: number, y: number, size: number, color: string, align: CanvasTextAlign = 'left'): void {
-    const c = this.ctx; c.font = `${size >= 22 ? 700 : 500} ${size}px "Trebuchet MS", sans-serif`;
-    c.fillStyle = color; c.textAlign = align; c.fillText(text, x, y);
+  private text(text: string, x: number, y: number, size: number, color: string, align: CanvasTextAlign = 'left', preserveAspect = true): void {
+    const c = this.ctx; c.save(); c.translate(x, y); c.scale(1, preserveAspect ? this.aspectCorrection : 1);
+    c.font = `${size >= 22 ? 700 : 500} ${size}px "Trebuchet MS", sans-serif`;
+    c.fillStyle = color; c.textAlign = align; c.fillText(text, 0, 0); c.restore();
   }
   private cacheLayer(width: number, height: number, paint: () => void): HTMLCanvasElement {
     const layer = document.createElement('canvas');
@@ -251,6 +302,7 @@ export class Field extends Phaser.Scene {
   private draw(): void {
     if (!this.ctx) return;
     const c = this.ctx;
+    c.setTransform(this.frame.width / W, 0, 0, this.frame.height / H, 0, 0);
     // The opaque cached background also clears the previous frame.
     c.drawImage(this.background, 0, 0);
     for (let i = 0; i < 44; i++) {
@@ -259,10 +311,10 @@ export class Field extends Phaser.Scene {
       this.ellipse(x, y, i % 5 === 0 ? 2 : 1, i % 5 === 0 ? 2 : 1, `rgba(110,205,255,${alpha})`);
     }
     this.drawCreature(); this.drawHelix(); this.drawCannons(); this.drawShot();
-    if (this.failed || this.creation.done) {
+    if (this.failed || this.creation.done && !this.transition) {
       c.fillStyle = '#040b15dc'; c.fillRect(210, 225, 340, 155);
       this.text(this.failed ? 'CONTAINMENT FAILED' : 'GENOME COMPLETE', 380, 280, 23, this.failed ? '#ff8b9f' : '#b9ef9c', 'center');
-      this.text(this.failed ? 'A completely empty chromosome escaped.' : '30 chromosomes. One wild Mutagon.', 380, 315, 14, '#d8e8ef', 'center');
+      this.text(this.failed ? 'An empty chain reached the bottom.' : `${TOTAL_SEGMENTS} quadra-chromes. One wild Mutagon.`, 380, 315, 14, '#d8e8ef', 'center');
       this.text('Use Restart to begin a new experiment', 380, 345, 13, '#8daab9', 'center');
     }
     this.frame.refresh();
@@ -271,23 +323,25 @@ export class Field extends Phaser.Scene {
     const c = this.ctx, mutations = this.creation.mutations, latest = mutations.at(-1);
     const chamber = c.createRadialGradient(1010, 330, 20, 1010, 330, 340);
     chamber.addColorStop(0, '#1a3941'); chamber.addColorStop(1, '#0f1e2c');
-    this.round(775, 82, 465, 490, 22); c.fillStyle = chamber; c.fill(); c.strokeStyle = '#6ea8b866'; c.stroke();
-    this.text('MUTAGON', 810, 123, 28, '#c4f99d');
-    const motion = creatureMotion(mutations, this.elapsed, this.reduced);
+    this.round(775, 22, 485, 574, 22); c.fillStyle = chamber; c.fill(); c.strokeStyle = '#6ea8b866'; c.stroke();
+    const state = creatureState(mutations);
+    const motion = animateCreature(state.motion, this.elapsed, this.reduced);
     if (latest && this.burst > 0 && !this.reduced) {
-      const previous = creatureMotion(mutations.slice(0, -1), this.elapsed);
+      const previous = animateCreature(state.previousMotion, this.elapsed);
       const blend = 1 - this.burst / .7;
       for (const key of ['tempo', 'drift', 'bob', 'tilt', 'shear', 'scaleX', 'scaleY', 'gaze'] as const) {
         motion[key] = previous[key] + (motion[key] - previous[key]) * blend;
       }
     }
-    this.text(this.burst && latest ? `GROWING: ${latest.kind.toUpperCase()}` : motion.name.toUpperCase(), 810, 148, 11, '#99c5b4');
-    c.save(); c.beginPath(); c.rect(785, 178, 445, 300); c.clip();
-    const x = 1010, y = 327;
-    this.ellipse(x, y + 100, 150 + motion.bob, 17, '#55ef8120');
+    c.save(); c.beginPath(); c.rect(785, 34, 465, 548); c.clip();
+    const x = 1010, y = 307;
+    const growthCount = mutations.length - (latest && !this.reduced ? this.burst / .7 : 0);
+    const growth = .55 + Math.min(.45, growthCount * .04);
+    this.ellipse(x, y + 100, (150 + motion.bob) * growth, 17 * growth, '#55ef8120');
     c.translate(x + motion.drift, y + 45 + motion.bob);
     c.rotate(motion.tilt); c.transform(1, 0, motion.shear, 1, 0, 0);
-    c.scale(1.1 * motion.scaleX, 1.1 * motion.scaleY); c.translate(-x, -y - 45);
+    const creatureScale = Math.min(1.5, 1.5 / this.aspectCorrection) * growth;
+    c.scale(creatureScale * motion.scaleX, creatureScale * this.aspectCorrection * motion.scaleY); c.translate(-x, -y - 45);
     const radius = 67 + Math.min(22, mutations.length * .45), height = 55 + Math.min(14, mutations.length * .2);
     const body = new Path2D(); body.moveTo(x - radius, y + 36);
     body.bezierCurveTo(x - radius - 12, y - 20, x - radius * .7, y - height, x - 12, y - height);
@@ -295,11 +349,9 @@ export class Field extends Phaser.Scene {
     body.bezierCurveTo(x + radius * .75, y + 65, x - radius * .8, y + 65, x - radius, y + 36);
     body.closePath();
     // Each hit persists in history; repeated traits grow new colored variants.
-    const visible = mutations.filter((m, i) => mutations.slice(i + 1).filter(n => n.kind === m.kind).length < 4);
     const families = new Map<string, number>();
-    for (const m of visible) {
+    for (const m of state.appendages) {
       const n = families.get(m.kind) ?? 0; families.set(m.kind, n + 1);
-      if (['eyes', 'bands', 'scales', 'spots', 'tongue', 'tusks', 'snozzle', 'whiskers', 'beak'].includes(m.kind)) continue;
       this.mutationStyle(m, latest, x, y, () => {
         const sway = this.reduced ? 0 : Math.sin(this.elapsed * (2 + motion.tempo * .3 + m.id % 5 * .2) + m.variant) * (m.kind === 'wings' ? 11 : m.kind === 'tail' || m.kind === 'tentacles' ? 10 : 5);
         const side = n % 2 ? -1 : 1;
@@ -393,10 +445,9 @@ export class Field extends Phaser.Scene {
     c.save(); c.shadowColor = '#91ff70'; c.shadowBlur = 23; c.fillStyle = gradient; c.fill(body); c.restore();
     // Pigment bands, scales and spots stay inside the body silhouette.
     c.save(); c.clip(body);
-    for (const m of visible) {
-      if (!['bands', 'scales', 'spots'].includes(m.kind)) continue;
+    for (const m of state.surface) {
       this.mutationStyle(m, latest, x, y, () => {
-        const lane = mutations.filter(n => n.kind === m.kind && n.id < m.id).length % 4;
+        const lane = state.lanes.get(m)!;
         if (m.kind === 'bands') {
           c.save(); c.translate(x, y); c.rotate((m.variant % 3 - 1) * .15);
           c.fillStyle = m.color; c.globalAlpha = .8;
@@ -410,25 +461,25 @@ export class Field extends Phaser.Scene {
       });
     }
     c.restore(); c.strokeStyle = '#c2ff9e'; c.lineWidth = 2.5; c.stroke(body);
-    const eyeMutations = mutations.filter(m => m.kind === 'eyes'), iris = eyeMutations.at(-1)?.color ?? '#658bda';
+    const eyeMutations = state.eyes, iris = eyeMutations.at(-1)?.color ?? '#658bda';
     if (eyeMutations.length) for (const sign of [-1, 1]) {
       const xx = x + sign * 25;
       this.ellipse(xx, y - 5, 19, 23, '#f7fff0');
       this.ellipse(xx + 2 + motion.gaze, y - 3, 12, 16, iris, '#1b3a32');
       this.ellipse(xx + 3 + motion.gaze, y - 2, 5, 10, '#092137'); this.ellipse(xx - 2, y - 12, 5, 6, '#ffffff');
     }
-    eyeMutations.slice(-4).forEach((m, i) => this.mutationStyle(m, latest, x, y, () => {
+    eyeMutations.forEach((m, i) => this.mutationStyle(m, latest, x, y, () => {
       const xx = x - 43 + i * 28, yy = y - 43 - (i % 2) * 7;
       this.ellipse(xx, yy, 10, 12, '#f8fff0'); this.ellipse(xx, yy, 6, 8, m.color); this.ellipse(xx, yy, 2.5, 6, '#122333');
     }));
     if (mutations.length) {
       c.beginPath(); c.arc(x, y + 23, 11, .2, Math.PI - .2); c.strokeStyle = '#173e28'; c.lineWidth = 3; c.stroke();
     }
-    visible.filter(m => m.kind === 'tongue').forEach((m, i) => this.mutationStyle(m, latest, x, y, () => {
+    state.tongues.forEach((m, i) => this.mutationStyle(m, latest, x, y, () => {
       const flick = this.reduced ? 0 : Math.sin(this.elapsed * (motion.tempo + i) * 2) * 9;
       this.line([{ x, y: y + 32 }, { x: x + 10 + i * 5, y: y + 57 }, { x: x - 20 - i * 12 + flick, y: y + 70 + i * 5 }], m.color, 9);
     }));
-    for (const m of visible.filter(m => ['tusks', 'snozzle', 'whiskers', 'beak'].includes(m.kind))) {
+    for (const m of state.face) {
       this.mutationStyle(m, latest, x, y, () => {
         const breathe = this.reduced ? 0 : Math.sin(this.elapsed * motion.tempo + m.variant) * 4;
         if (m.kind === 'tusks') {
@@ -463,14 +514,12 @@ export class Field extends Phaser.Scene {
     }
     c.restore();
     // Thin translucent containment bars let the specimen's colors show through.
-    for (let xx = 798; xx <= 1222; xx += 47) {
-      this.line([{ x: xx, y: 184 }, { x: xx, y: 477 }], '#c8f3ff25', 2);
-      this.line([{ x: xx + 2, y: 184 }, { x: xx + 2, y: 477 }], '#ffffff09', 1);
+    for (let xx = 798; xx <= 1242; xx += 47) {
+      this.line([{ x: xx, y: 36 }, { x: xx, y: 582 }], '#c8f3ff25', 2);
+      this.line([{ x: xx + 2, y: 36 }, { x: xx + 2, y: 582 }], '#ffffff09', 1);
     }
-    this.line([{ x: 790, y: 181 }, { x: 1225, y: 181 }], '#a4e6f04d', 3);
-    this.line([{ x: 790, y: 480 }, { x: 1225, y: 480 }], '#a4e6f04d', 3);
-    this.text(`${mutations.length} MUTATIONS / ${this.creation.completed} CHROMOSOMES`, 810, 518, 14, '#b9ef9c');
-    this.text(latest ? `${latest.name} / ${latest.pair}` : 'Green blob · awaiting first mutation', 810, 547, 14, latest?.color ?? '#a2bbc7');
+    this.line([{ x: 790, y: 34 }, { x: 1245, y: 34 }], '#a4e6f04d', 3);
+    this.line([{ x: 790, y: 584 }, { x: 1245, y: 584 }], '#a4e6f04d', 3);
   }
 
   private mutationStyle(m: Mutation, latest: Mutation | undefined, x: number, y: number, paint: () => void): void {
@@ -497,20 +546,20 @@ export class Field extends Phaser.Scene {
     const metal = c.createLinearGradient(168, 0, 592, 0);
     metal.addColorStop(0, '#284d50'); metal.addColorStop(.12, '#12282e');
     metal.addColorStop(.5, '#07151c'); metal.addColorStop(.88, '#12282e'); metal.addColorStop(1, '#284d50');
-    this.round(168, 78, 424, 518, 23); c.fillStyle = metal; c.fill(); c.strokeStyle = '#7baca775'; c.lineWidth = 2; c.stroke();
-    const inner = c.createLinearGradient(0, 90, 0, 580);
+    this.round(168, 22, 424, 574, 23); c.fillStyle = metal; c.fill(); c.strokeStyle = '#7baca775'; c.lineWidth = 2; c.stroke();
+    const inner = c.createLinearGradient(0, 34, 0, 580);
     inner.addColorStop(0, '#17372d'); inner.addColorStop(.35, '#061524'); inner.addColorStop(1, '#123c2b');
-    this.round(184, 90, 392, 492, 15); c.fillStyle = inner; c.fill();
+    this.round(184, 34, 392, 548, 15); c.fillStyle = inner; c.fill();
     for (const xx of [176, 584]) {
-      this.line([{ x: xx, y: 111 }, { x: xx, y: 559 }], '#77c0ae45', 3);
-      for (const yy of [101, 238, 414, 572]) this.ellipse(xx, yy, 3, 3, '#99c9b2', '#071922');
+      this.line([{ x: xx, y: 55 }, { x: xx, y: 559 }], '#77c0ae45', 3);
+      for (const yy of [45, 238, 414, 572]) this.ellipse(xx, yy, 3, 3, '#99c9b2', '#071922');
     }
     // Living slime at the inlet and pooled below the moving chromosome.
-    c.save(); c.beginPath(); c.rect(184, 87, 392, 499); c.clip();
+    c.save(); c.beginPath(); c.rect(184, 31, 392, 555); c.clip();
     for (let i = 0; i < 8; i++) {
       const xx = 200 + i * 48;
       const pulse = this.reduced ? 0 : Math.sin(this.elapsed * 1.3 + i * 1.8) * 5;
-      this.round(xx, 87, 11 + i % 3 * 3, 14 + i % 4 * 8 + pulse, 8);
+      this.round(xx, 31, 11 + i % 3 * 3, 14 + i % 4 * 8 + pulse, 8);
       c.fillStyle = '#85da6966'; c.fill();
     }
     c.beginPath(); c.moveTo(184, 587);
@@ -529,38 +578,87 @@ export class Field extends Phaser.Scene {
   private drawHelix(): void {
     const c = this.ctx;
     this.drawCanal();
-    c.save(); c.beginPath(); c.rect(184, 90, 392, 492); c.clip();
+    c.save(); c.beginPath(); c.rect(184, 34, 392, 548); c.clip();
+    const celebrating = this.completionPhase === 'celebrating';
+    const celebratingTime = CELEBRATION_SECONDS - this.celebration;
+    const completed = this.transition > 0;
+    if (celebrating && !this.reduced) {
+      const strength = Math.sin(celebratingTime / CELEBRATION_SECONDS * Math.PI);
+      c.translate(Math.sin(celebratingTime * 82) * 5 * strength, Math.cos(celebratingTime * 67) * 3 * strength);
+    }
     const pos = this.positions();
     const start = pos[0].y - 44, end = pos[3].y + 44;
     for (let strand = 0; strand < 2; strand++) {
-      const points = Array.from({ length: 150 }, (_, i) => {
-        const y = start + i / 149 * (end - start);
+      const points = this.strandPoints[strand];
+      for (let i = 0; i < points.length; i++) {
+        const y = start + i / (points.length - 1) * (end - start);
         const phase = (y - this.offset - 130) / 88 * Math.PI;
         const ripple = this.reduced ? 0 : Math.sin(phase) * Math.sin(this.elapsed * 2.7 + (y - this.offset) * .035) * 4;
-        return { x: this.helixCenter(y) + Math.cos(phase + strand * Math.PI) * this.helixRadius(y) + ripple, y };
-      });
-      this.line(points, strand ? '#ff72c9' : '#65aaff', 5, this.reduced ? 0 : 12);
+        points[i].x = this.helixCenter(y) + Math.cos(phase + strand * Math.PI) * this.helixRadius(y) + ripple;
+        points[i].y = y;
+      }
+      this.line(points, strand ? '#ff72c9' : '#65aaff', completed ? 7 : 5, completed ? 22 : this.reduced ? 0 : 12);
       this.line(points, strand ? '#ffd2ee' : '#d4e7ff', 1.3);
     }
     pos.forEach((p, i) => {
       const pair = this.creation.segments[this.shownSegment][i];
       const radius = this.helixRadius(p.y);
-      this.line([{ x: p.x - radius, y: p.y }, { x: p.x + radius, y: p.y }], pair || this.controls.pair ? '#b9ef9c' : '#41536b', 3);
+      if (this.dropTarget === i && !pair) {
+        this.round(p.x - 45, p.y - 38, 90, 76, 12);
+        c.fillStyle = '#8eff7730'; c.fill(); c.strokeStyle = '#c8ff9c'; c.lineWidth = 3; c.stroke();
+        this.text('DROP PAIR', p.x + 58, p.y + 5, 11, '#d0ffb3');
+      }
+      this.line([{ x: p.x - radius, y: p.y }, { x: p.x + radius, y: p.y }], pair || this.controls.pair ? '#b9ef9c' : '#41536b', completed ? 4 : 3, completed ? 18 : 0);
       for (let j = 0; j < 2; j++) {
+        c.save();
+        if (completed) { c.shadowColor = '#d5ff9d'; c.shadowBlur = this.reduced ? 12 : 15 + Math.sin(celebratingTime * 18 + i) * 7; }
         this.round(p.x - 36, p.y - 31 + j * 34, 72, 28, 9);
-        c.fillStyle = pair ? '#183a3c' : '#0b1728'; c.fill();
+        c.fillStyle = completed ? '#31554a' : pair ? '#183a3c' : '#0b1728'; c.fill();
         c.strokeStyle = pair ? COLORS[pair[j] as Base] : '#7895a8'; c.lineWidth = 2; c.stroke();
         this.text(pair ? pair[j] : '-', p.x, p.y - 9 + j * 34, 20, pair ? COLORS[pair[j] as Base] : '#7895a8', 'center');
+        c.restore();
       }
+      if (completed) this.drawCompletionSparks(p, i, celebratingTime, celebrating);
       this.text(String(i + 1), 197, p.y + 5, 12, '#91b3c6', 'center');
     });
     c.restore();
-    this.text('DNA CANAL ↓', 380, 43, 18, '#c4f99d', 'center');
-    this.text(`CHROMOSOME ${this.creation.active + 1} / 30`, 380, 65, 11, '#91acbf', 'center');
     this.line([{ x: 188, y: 580 }, { x: 572, y: 580 }], '#ff8291', 3);
-    this.text(this.creation.linked ? 'LINKED · SAFE TO RECIRCULATE' : 'LINK A PAIR BEFORE THE EXIT', 380, 610, 11, this.creation.linked ? '#b9ef9c' : '#ff9aa7', 'center');
-    this.text('A → T ≠ T → A', 1000, 609, 16, '#b9ef9c', 'center');
-    this.text('Click order writes your creature’s mutation pattern', 1000, 632, 12, '#8baab9', 'center');
+    if (completed) {
+      this.line([{ x: 235, y: 586 }, { x: 525, y: 586 }], '#c9ff95', 5, 22);
+      this.text('MASTER CHAIN ↓', 380, 574, 12, '#e1ffbc', 'center');
+    }
+  }
+  private drawCompletionSparks(p: Point, slot: number, time: number, celebrating: boolean): void {
+    const c = this.ctx;
+    c.save();
+    // Reduced motion retains a steady, legible completion halo without flicker or shake.
+    if (this.reduced) {
+      this.round(p.x - 43, p.y - 38, 86, 78, 14);
+      c.strokeStyle = '#dfffaf'; c.lineWidth = 2; c.stroke();
+    } else {
+      const clock = celebrating ? time : this.elapsed;
+      for (let n = 0; n < 12; n++) {
+        const life = (clock * (celebrating ? 1.8 : .8) + n * .137 + slot * .23) % 1;
+        const angle = n * 2.399 + slot * 1.7;
+        const distance = 43 + life * (celebrating ? 62 : 25);
+        const x = p.x + Math.cos(angle) * distance;
+        const y = p.y + Math.sin(angle) * distance * .7 - life * 15;
+        const size = (1 - life) * (celebrating ? 6 : 4) + 1;
+        c.globalAlpha = Math.sin(life * Math.PI);
+        const color = ['#f7ffbe', '#8effb5', '#86dfff', '#ffc5ed'][n % 4];
+        this.line([{ x: x - size, y }, { x: x + size, y }], color, 1.7, 12);
+        this.line([{ x, y: y - size }, { x, y: y + size }], color, 1.7, 12);
+      }
+      c.globalAlpha = 1;
+      // A narrow moving sheen glimmers across the pair holders; letters stay readable.
+      const sweep = (clock * 1.7 + slot * .19) % 1;
+      c.save(); this.round(p.x - 36, p.y - 31, 72, 62, 9); c.clip();
+      const x = p.x - 65 + sweep * 130;
+      const shine = c.createLinearGradient(x - 15, 0, x + 15, 0);
+      shine.addColorStop(0, '#ffffff00'); shine.addColorStop(.5, '#edffdf85'); shine.addColorStop(1, '#ffffff00');
+      c.fillStyle = shine; c.fillRect(x - 15, p.y - 31, 30, 62); c.restore();
+    }
+    c.restore();
   }
   private drawCannons(): void {
     const c = this.ctx;
@@ -574,9 +672,8 @@ export class Field extends Phaser.Scene {
     }
     GUN_X.forEach((x, i) => {
       const y = this.launcherY(BASES[i]), color = COLORS[BASES[i]];
-      c.save(); c.translate(x, y); c.scale(SHOOTER_SCALE, SHOOTER_SCALE); c.translate(-x, -y);
+      c.save(); c.translate(x, y); c.scale(SHOOTER_SCALE, SHOOTER_SCALE * this.aspectCorrection); c.translate(-x, -y);
       const active = this.controls.selected.includes(BASES[i]) || !!this.controls.flight?.pair.includes(BASES[i]);
-      const wiggle = 0;
       if (active) {
         c.save();
         const halo = c.createRadialGradient(x, y, 22, x, y, 62);
@@ -590,7 +687,7 @@ export class Field extends Phaser.Scene {
         c.beginPath(); c.arc(x, y, 46, Math.PI - .7, Math.PI + .7); c.stroke();
         c.restore();
       }
-      c.save(); c.translate(x, y); c.rotate(wiggle);
+      c.save(); c.translate(x, y);
       c.shadowColor = color; c.shadowBlur = active ? 18 : 4;
       c.fillStyle = active ? '#234a50' : '#142635'; c.strokeStyle = color; c.lineWidth = 2;
       // Four original illustrated bio-machines: shell, spore, claw, and gas sac.
@@ -617,7 +714,7 @@ export class Field extends Phaser.Scene {
       }
       c.shadowBlur = 0;
       const angle = this.controls.target !== null ? this.angles[i] : i < 2 ? 0 : Math.PI;
-      c.save(); c.rotate(angle - wiggle);
+      c.save(); c.rotate(angle);
       this.round(22, -12, 52, 24, i === 3 ? 12 : 5); c.fillStyle = '#294454'; c.fill(); c.strokeStyle = color; c.stroke();
       c.fillStyle = color;
       if (i === 1) { c.fillRect(55, -17, 9, 34); c.fillRect(70, -17, 9, 34); }
@@ -625,10 +722,9 @@ export class Field extends Phaser.Scene {
       else { this.ellipse(73, 0, 9, i === 3 ? 18 : 14, color); }
       c.restore();
       this.ellipse(0, 0, 22, 24, active ? color : '#0a1523', active ? '#ffffff' : color);
-      this.text(BASES[i], 0, 10, 30, active ? '#071321' : color, 'center');
+      this.text(BASES[i], 0, 10, 30, active ? '#071321' : color, 'center', false);
       c.restore(); c.restore();
     });
-    this.text(this.controls.pair ? 'PAIR READY · PICK A CHAIN' : this.controls.selected.length ? 'FILL BOTH UP / DOWN SLOTS' : 'CHOOSE A BASE', 380, 641, 13, '#bdd3df', 'center');
   }
   private drawShot(): void {
     const flight = this.controls.flight; if (!flight) return;
@@ -655,7 +751,7 @@ export function startField(parent: HTMLElement, creation: Creation, hooks: GameH
     audio: { noAudio: true },
     fps: { target: 60, limit: 60 },
     render: { antialias: true },
-    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+    scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
     scene: [scene],
   });
   return scene;

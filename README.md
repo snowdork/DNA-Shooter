@@ -1,6 +1,6 @@
 # DNA Shooter
 
-A TypeScript + Phaser browser game: click complementary side shooters in order to fill a vertical DNA stream. Link at least one pair before each chromosome exits the bottom. Linked chromosomes recirculate safely until all four rungs are filled; complete 30 chromosomes to win. Every pair transforms your caged Mutagon. Complementary base pairing is real; creature adaptations are imaginative biology.
+A TypeScript + Phaser browser game: click complementary side shooters in order to fill a vertical DNA stream. Each quadra-chrome is a set of four pairs that streams down without looping back. Fill every chain before it reaches the bottom: any empty chain at the exit ends the game. Complete 10 quadra-chromes to win. Every pair transforms your caged Mutagon. Complementary base pairing is real; creature adaptations are imaginative biology.
 
 ## Start and play locally
 
