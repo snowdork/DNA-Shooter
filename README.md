@@ -14,7 +14,7 @@ npm run dev
 
 Run `npm ci` on first setup or after dependency changes. Keep the terminal open and visit **[http://127.0.0.1:5173/](http://127.0.0.1:5173/)**, then click **Start experiment**. If Vite prints a different port, use its printed URL. Press **Ctrl+C** in the terminal to stop the local server. On another computer, use your clone's actual path.
 
-Click A then T, T then A, C then G, or G then C to prepare a pair, then click an empty chromosome rung to fire. Order changes the mutation. Each shot needs a fresh pair selection.
+Drag complementary bases into the UP and DOWN holders, or click a base and then click its destination holder. Either holder can be filled first. Once the pair is READY, click an empty chromosome chain to populate it. Slot order changes the mutation. Each shot needs a fresh pair.
 
 ## Guides
 

@@ -7,8 +7,8 @@ export const W = 1280;
 export const H = 650;
 export const COLORS: Record<Base, string> = { A: '#ffbc4c', T: '#ff6bd9', C: '#45dfff', G: '#b18aff' };
 const ENTRY_OFFSET = -290;
-const GUN_X = [85, 85, 675, 675];
-const SHOOTER_SCALE = .68;
+const GUN_X = [47, 119, 640, 712];
+const SHOOTER_SCALE = .52;
 export const SHOOTER_RADIUS = 43 * SHOOTER_SCALE;
 export interface GameHooks {
   changed: () => void;
@@ -92,16 +92,38 @@ export class Field extends Phaser.Scene {
     if (this.controls.pair) this.hooks.notice(`${this.controls.pair} ready — click an empty chromosome rung to fire.`);
     this.hooks.changed();
   }
+  assemble(base: Base, position: 0 | 1): boolean {
+    if (this.paused || this.creation.done || this.failed || this.transition || this.controls.flight) return false;
+    this.hooks.notice(this.controls.setBase(base, position)); this.hooks.changed();
+    return this.controls.slots[position] === base;
+  }
+  deselect(base: Base): void {
+    if (this.paused || this.creation.done || this.failed || this.transition) return;
+    if (this.controls.deselect(base)) {
+      this.aligned = false;
+      this.hooks.notice(`${base} deselected. ${this.controls.selected.length ? 'Complete the remaining pair.' : 'Choose a new base.'}`);
+      this.repaint(); this.hooks.changed();
+    }
+  }
+  clearSide(side: 'at' | 'cg'): void {
+    if (this.controls.flight) return;
+    const first = this.controls.selected[0];
+    if (first && (side === 'at' ? ['A', 'T'] : ['C', 'G']).includes(first)) {
+      this.controls.cancel(); this.aligned = false;
+      this.hooks.notice(`${side.toUpperCase()} preview cleared. Choose a new UP base.`);
+      this.repaint(); this.hooks.changed();
+    }
+  }
   target(slot: number | null): void {
     if (this.paused || this.creation.done || this.failed || this.transition) return;
     let result = this.controls.click(slot, i => !this.creation.segments[this.creation.active][i]);
     if (result === 'locked') result = this.controls.click(slot, i => !this.creation.segments[this.creation.active][i]);
     if (result === 'queued') this.hooks.notice(this.aligned ? 'Launching pair…' : 'Shot queued — lining up the cannons…');
-    else if (!this.controls.pair && !this.controls.flight) this.hooks.notice('Choose two complementary letters first: A + T or C + G.');
+    else if (!this.controls.pair && !this.controls.flight) this.hooks.notice('Fill both UP and DOWN with a matching pair before choosing a chain.');
     this.hooks.changed();
   }
   launcherX(base: Base): number { return GUN_X[BASES.indexOf(base)]; }
-  launcherY(base: Base): number { return base === 'A' || base === 'C' ? 265 : 405; }
+  launcherY(_base: Base): number { return 420; }
   positions(): Point[] {
     for (let i = 0; i < 4; i++) {
       this.slotPositions[i].y = 130 + i * 88 + this.offset;
@@ -277,23 +299,31 @@ export class Field extends Phaser.Scene {
     const families = new Map<string, number>();
     for (const m of visible) {
       const n = families.get(m.kind) ?? 0; families.set(m.kind, n + 1);
-      if (['eyes', 'bands', 'scales', 'spots', 'tongue'].includes(m.kind)) continue;
+      if (['eyes', 'bands', 'scales', 'spots', 'tongue', 'tusks', 'snozzle', 'whiskers', 'beak'].includes(m.kind)) continue;
       this.mutationStyle(m, latest, x, y, () => {
         const sway = this.reduced ? 0 : Math.sin(this.elapsed * (2 + motion.tempo * .3 + m.id % 5 * .2) + m.variant) * (m.kind === 'wings' ? 11 : m.kind === 'tail' || m.kind === 'tentacles' ? 10 : 5);
         const side = n % 2 ? -1 : 1;
-        if (m.kind === 'legs') {
+        if (m.kind === 'legs' || m.kind === 'paws') {
           for (const sign of [-1, 1]) {
             const xx = x + sign * (24 + n * 15);
             const step = this.reduced ? 0 : Math.sin(this.elapsed * motion.tempo * 1.35 + sign * Math.PI / 2 + m.variant) * 7;
             this.line([{ x: xx, y: y + 32 }, { x: xx + sign * 9, y: y + 72 + n * 5 + step * .4 }, { x: xx + sign * (20 + n * 3), y: y + 91 + step }], m.color, 13);
-            this.ellipse(xx + sign * (22 + n * 3), y + 94 + step, 16, 8, m.color, '#ffffff90');
+            const footX = xx + sign * (22 + n * 3), footY = y + 94 + step;
+            this.ellipse(footX, footY, m.kind === 'paws' ? 21 : 16, m.kind === 'paws' ? 12 : 8, m.color, '#ffffff90');
+            if (m.kind === 'paws') for (let toe = -1; toe <= 1; toe++) this.ellipse(footX + toe * 10, footY - 4, 4, 5, '#ffffffb0');
           }
         } else if (m.kind === 'tail' || m.kind === 'tentacles') {
-          const count = m.kind === 'tail' ? 1 : 3;
+          const count = m.kind === 'tail' ? 1 : 4 + m.variant % 3;
           for (let j = 0; j < count; j++) {
             c.beginPath(); c.moveTo(x + side * (radius - 8), y + 25);
             c.bezierCurveTo(x + side * 160, y + 95 - j * 15, x + side * (130 + n * 5), y - 75 + j * 12, x + side * (155 + n * 4), y - 15 + sway + j * 20);
-            c.strokeStyle = m.color; c.lineWidth = m.kind === 'tail' ? 12 : 6; c.lineCap = 'round'; c.stroke();
+            c.strokeStyle = m.color; c.lineWidth = m.kind === 'tail' ? 12 : 7; c.lineCap = 'round'; c.stroke();
+            if (m.kind === 'tentacles') for (let k = 2; k < 6; k++) {
+              const t = k / 7, u = 1 - t;
+              const xx = u ** 3 * (x + side * (radius - 8)) + 3 * u * u * t * (x + side * 160) + 3 * u * t * t * (x + side * (130 + n * 5)) + t ** 3 * (x + side * (155 + n * 4));
+              const yy = u ** 3 * (y + 25) + 3 * u * u * t * (y + 95 - j * 15) + 3 * u * t * t * (y - 75 + j * 12) + t ** 3 * (y - 15 + sway + j * 20);
+              this.ellipse(xx, yy + 2, 2.5, 2.5, '#ffe9f4', m.color);
+            }
           }
         } else if (m.kind === 'wings') {
           for (const sign of [-1, 1]) {
@@ -308,6 +338,42 @@ export class Field extends Phaser.Scene {
             const yy = y - 35 + j * 22 + n * 5;
             this.line([{ x: x + sign * 60, y: yy }, { x: x + sign * (115 + n * 6), y: yy - 25 + sway }], m.color, 5);
             for (let k = 0; k < 4; k++) this.line([{ x: x + sign * (76 + k * 9), y: yy - k * 5 }, { x: x + sign * (82 + k * 9), y: yy - 20 - k * 5 + sway }], m.color, 3);
+          }
+        } else if (m.kind === 'sparks') {
+          for (let j = 0; j < 7; j++) {
+            const angle = j / 7 * Math.PI * 2 + n * .2;
+            const r = 101 + n * 5 + (this.reduced ? 0 : Math.sin(this.elapsed * 1.8 + j) * 5);
+            const xx = x + Math.cos(angle) * r, yy = y + Math.sin(angle) * r * .8;
+            this.line([{ x: xx - 5, y: yy - 8 }, { x: xx + 3, y: yy - 2 }, { x: xx - 2, y: yy + 3 }, { x: xx + 6, y: yy + 9 }], m.color, 2.5, this.reduced ? 0 : 9);
+            this.ellipse(xx + 9, yy - 7, 1.5, 1.5, '#fff8c6');
+          }
+        } else if (m.kind === 'ears') {
+          for (const sign of [-1, 1]) {
+            const xx = x + sign * (48 + n * 9), top = y - height - 35 + sway;
+            c.beginPath(); c.moveTo(xx - 20, y - 35); c.quadraticCurveTo(xx + sign * 20, top - 15, xx + 20, y - 35);
+            c.fillStyle = m.color; c.fill(); c.strokeStyle = '#ffffffa0'; c.lineWidth = 2; c.stroke();
+            this.line([{ x: xx - 7, y: y - 43 }, { x: xx + sign * 8, y: top + 7 }, { x: xx + 8, y: y - 43 }], '#ffb9d0', 5);
+          }
+        } else if (m.kind === 'fins') {
+          for (const sign of [-1, 1]) {
+            c.beginPath(); c.moveTo(x + sign * 65, y + 5);
+            c.lineTo(x + sign * (130 + n * 6), y - 55 + sway); c.lineTo(x + sign * (145 + n * 4), y + 45); c.closePath();
+            c.fillStyle = m.color + 'b0'; c.fill(); c.strokeStyle = m.color; c.lineWidth = 2; c.stroke();
+            for (let j = 0; j < 4; j++) this.line([{ x: x + sign * 65, y: y + 5 }, { x: x + sign * (132 + j * 3), y: y - 43 + j * 26 + sway }], '#ffffff80', 1.5);
+          }
+        } else if (m.kind === 'claws') {
+          for (const sign of [-1, 1]) {
+            const xx = x + sign * (133 + n * 7), yy = y + 12 + sway;
+            this.line([{ x: x + sign * 60, y: y + 30 }, { x: x + sign * 100, y: y + 47 }, { x: xx, y: yy }], m.color, 10);
+            this.line([{ x: xx, y: yy }, { x: xx + sign * 17, y: yy - 23 }, { x: xx + sign * 27, y: yy - 10 }], m.color, 8);
+            this.line([{ x: xx, y: yy }, { x: xx + sign * 28, y: yy + 12 }, { x: xx + sign * 28, y: yy - 2 }], m.color, 8);
+          }
+        } else if (m.kind === 'plumes') {
+          for (let j = 0; j < 7; j++) {
+            const xx = x + (j - 3) * 23, yy = y - height - 18 - Math.sin(j / 6 * Math.PI) * 15 + sway;
+            this.line([{ x: x + (j - 3) * 8, y: y - 36 }, { x: xx, y: yy }], m.color, 5);
+            this.ellipse(xx, yy, 8, 14, m.color, '#ffffff80');
+            this.line([{ x: xx, y: yy + 12 }, { x: xx, y: yy - 11 }], '#fff6cfaa', 1.5);
           }
         } else {
           for (const sign of [-1, 1]) {
@@ -362,6 +428,32 @@ export class Field extends Phaser.Scene {
       const flick = this.reduced ? 0 : Math.sin(this.elapsed * (motion.tempo + i) * 2) * 9;
       this.line([{ x, y: y + 32 }, { x: x + 10 + i * 5, y: y + 57 }, { x: x - 20 - i * 12 + flick, y: y + 70 + i * 5 }], m.color, 9);
     }));
+    for (const m of visible.filter(m => ['tusks', 'snozzle', 'whiskers', 'beak'].includes(m.kind))) {
+      this.mutationStyle(m, latest, x, y, () => {
+        const breathe = this.reduced ? 0 : Math.sin(this.elapsed * motion.tempo + m.variant) * 4;
+        if (m.kind === 'tusks') {
+          for (const sign of [-1, 1]) {
+            c.beginPath(); c.moveTo(x + sign * 15, y + 25);
+            c.bezierCurveTo(x + sign * 20, y + 75, x + sign * 65, y + 70, x + sign * 61, y - 1 + breathe);
+            c.quadraticCurveTo(x + sign * 40, y + 51, x + sign * 28, y + 23); c.closePath();
+            c.fillStyle = '#fff2ce'; c.fill(); c.strokeStyle = m.color; c.lineWidth = 2.5; c.stroke();
+          }
+        } else if (m.kind === 'snozzle') {
+          c.beginPath(); c.moveTo(x, y + 14);
+          c.bezierCurveTo(x - 8, y + 60, x + 9, y + 104, x + 48 + breathe, y + 76);
+          c.strokeStyle = m.color; c.lineWidth = 17; c.lineCap = 'round'; c.stroke();
+          this.ellipse(x + 48 + breathe, y + 76, 12, 10, m.color, '#ffffffb0');
+          this.ellipse(x + 45 + breathe, y + 75, 2.5, 4, '#17332c'); this.ellipse(x + 52 + breathe, y + 75, 2.5, 4, '#17332c');
+          for (let j = 0; j < 3; j++) this.line([{ x: x - 5, y: y + 34 + j * 12 }, { x: x + 5, y: y + 35 + j * 12 }], '#ffffff90', 1.5);
+        } else if (m.kind === 'whiskers') {
+          for (const sign of [-1, 1]) for (let j = 0; j < 3; j++) this.line([{ x: x + sign * 16, y: y + 20 }, { x: x + sign * 95, y: y + 3 + j * 19 + breathe }], m.color, 2);
+        } else {
+          c.beginPath(); c.moveTo(x - 17, y + 13); c.lineTo(x, y + 54 + breathe); c.lineTo(x + 17, y + 13); c.closePath();
+          c.fillStyle = m.color; c.fill(); c.strokeStyle = '#fff2ce'; c.lineWidth = 2; c.stroke();
+          this.line([{ x: x - 10, y: y + 21 }, { x: x + 10, y: y + 21 }], '#332618', 2);
+        }
+      });
+    }
     this.ellipse(x - 28, y - 32, 22, 7, '#ffffff25');
     if (latest && this.burst && !this.reduced) {
       for (let i = 0; i < 14; i++) {
@@ -453,12 +545,12 @@ export class Field extends Phaser.Scene {
     pos.forEach((p, i) => {
       const pair = this.creation.segments[this.shownSegment][i];
       const radius = this.helixRadius(p.y);
-      this.line([{ x: p.x - radius, y: p.y }, { x: p.x + radius, y: p.y }], pair ? '#b9ef9c' : '#41536b', 3);
+      this.line([{ x: p.x - radius, y: p.y }, { x: p.x + radius, y: p.y }], pair || this.controls.pair ? '#b9ef9c' : '#41536b', 3);
       for (let j = 0; j < 2; j++) {
         this.round(p.x - 36, p.y - 31 + j * 34, 72, 28, 9);
         c.fillStyle = pair ? '#183a3c' : '#0b1728'; c.fill();
         c.strokeStyle = pair ? COLORS[pair[j] as Base] : '#7895a8'; c.lineWidth = 2; c.stroke();
-        this.text(pair ? pair[j] : '·', p.x, p.y - 9 + j * 34, 20, pair ? COLORS[pair[j] as Base] : '#7895a8', 'center');
+        this.text(pair ? pair[j] : '-', p.x, p.y - 9 + j * 34, 20, pair ? COLORS[pair[j] as Base] : '#7895a8', 'center');
       }
       this.text(String(i + 1), 197, p.y + 5, 12, '#91b3c6', 'center');
     });
@@ -472,8 +564,14 @@ export class Field extends Phaser.Scene {
   }
   private drawCannons(): void {
     const c = this.ctx;
-    this.text('AT SHOOTERS', 85, 205, 12, '#8faabb', 'center');
-    this.text('CG SHOOTERS', 675, 205, 12, '#8faabb', 'center');
+    for (const [x, width, bases] of [[6, 152, ['A', 'T']], [602, 156, ['C', 'G']]] as const) {
+      const active = bases.some(base => this.controls.selected.includes(base) || this.controls.flight?.pair.includes(base));
+      this.round(x, 178, width, 330, 16); c.fillStyle = '#102833cc'; c.fill();
+      c.strokeStyle = active ? '#b9ef9caa' : '#527b8a88'; c.lineWidth = active ? 2 : 1; c.stroke();
+      for (const rail of [x + 9, x + width - 9]) this.line([{ x: rail, y: 216 }, { x: rail, y: 488 }], '#c4f6ff18', 2);
+      this.round(x + 12, 477, width - 24, 19, 8); c.fillStyle = '#6ec15b22'; c.fill();
+      for (let i = 0; i < 4; i++) this.ellipse(x + 29 + i * 30, 485 + Math.sin(i) * 2, 3 + i % 2, 3, '#9ff79a44');
+    }
     GUN_X.forEach((x, i) => {
       const y = this.launcherY(BASES[i]), color = COLORS[BASES[i]];
       c.save(); c.translate(x, y); c.scale(SHOOTER_SCALE, SHOOTER_SCALE); c.translate(-x, -y);
@@ -530,7 +628,7 @@ export class Field extends Phaser.Scene {
       this.text(BASES[i], 0, 10, 30, active ? '#071321' : color, 'center');
       c.restore(); c.restore();
     });
-    this.text(this.controls.selected.length ? `FIRST: ${this.controls.selected[0]}` : 'CHOOSE FIRST', 380, 641, 13, '#bdd3df', 'center');
+    this.text(this.controls.pair ? 'PAIR READY · PICK A CHAIN' : this.controls.selected.length ? 'FILL BOTH UP / DOWN SLOTS' : 'CHOOSE A BASE', 380, 641, 13, '#bdd3df', 'center');
   }
   private drawShot(): void {
     const flight = this.controls.flight; if (!flight) return;

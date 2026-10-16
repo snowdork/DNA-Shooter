@@ -9,7 +9,7 @@ export const MODEL_VERSION = 1;
 export const COMPLEMENT: Record<Base, Base> = { A: 'T', T: 'A', C: 'G', G: 'C' };
 export interface Placement { segment: number; slot: number; pair: Pair }
 export interface Adaptation { id: number; name: string; pattern: Pair[] }
-export interface Save { version: number; seed: number; placements: Placement[] }
+export interface Save { version: number; seed: number; mutationVersion?: 1 | 2; placements: Placement[] }
 
 export function isPair(value: unknown): value is Pair {
   return typeof value === 'string' && PAIRS.includes(value as typeof PAIRS[number]);
@@ -25,7 +25,7 @@ export function adaptation(pattern: Pair[]): Adaptation {
   return { id, pattern: [...pattern], name: `${QUALITIES[(id >> 3) % 8]} ${FORMS[id % 8]} · ${id.toString(16).toUpperCase().padStart(2, '0')}` };
 }
 
-export const TRAITS = ['eyes', 'legs', 'bands', 'tail', 'antennae', 'tongue', 'gills', 'wings', 'horns', 'tentacles', 'scales', 'spots'] as const;
+export const TRAITS = ['eyes', 'legs', 'bands', 'tail', 'antennae', 'tongue', 'gills', 'wings', 'horns', 'tentacles', 'scales', 'spots', 'sparks', 'tusks', 'snozzle', 'paws', 'ears', 'whiskers', 'fins', 'beak', 'claws', 'plumes'] as const;
 export type Trait = typeof TRAITS[number];
 export interface Mutation { id: number; kind: Trait; color: string; name: string; variant: number; pair: Pair; segment: number; slot: number }
 const PIGMENTS = [
@@ -33,22 +33,24 @@ const PIGMENTS = [
   { name: 'Rose', color: '#ff7ec4' }, { name: 'Amber', color: '#ffc75f' },
   { name: 'Violet', color: '#c098ff' }, { name: 'Turquoise', color: '#6fffe2' },
 ];
-function mutation(index: number, placement: Placement, seed: number): Mutation {
+function mutation(index: number, placement: Placement, seed: number, mutationVersion: 1 | 2): Mutation {
   const orientation = PAIRS.indexOf(placement.pair as typeof PAIRS[number]);
-  const kindIndex = (index + orientation * 3) % TRAITS.length;
+  const traitCount = mutationVersion === 1 ? 12 : TRAITS.length;
+  const kindIndex = (index + orientation * 3) % traitCount;
   const kind = TRAITS[kindIndex];
-  const pigment = PIGMENTS[(kindIndex + Math.floor(index / TRAITS.length) + orientation) % PIGMENTS.length];
+  const pigment = PIGMENTS[(kindIndex + Math.floor(index / traitCount) + orientation) % PIGMENTS.length];
   const variant = (seed + index * 17 + placement.slot * 7 + orientation * 11) >>> 0;
   return { id: index + 1, kind, color: pigment.color, name: `${pigment.name} ${kind} · ${String(index + 1).padStart(3, '0')}`, variant, pair: placement.pair, segment: placement.segment, slot: placement.slot };
 }
 
 export class Creation {
   readonly seed: number;
+  readonly mutationVersion: 1 | 2;
   placements: Placement[] = [];
   segments: (Pair | null)[][] = Array.from({ length: TOTAL_SEGMENTS }, () => Array(SLOTS).fill(null));
   adaptations: Adaptation[] = [];
   mutations: Mutation[] = [];
-  constructor(seed = 314159) { this.seed = seed >>> 0; }
+  constructor(seed = 314159, mutationVersion: 1 | 2 = 2) { this.seed = seed >>> 0; this.mutationVersion = mutationVersion; }
   get completed(): number { return this.adaptations.length; }
   get done(): boolean { return this.completed === TOTAL_SEGMENTS; }
   get active(): number { return Math.min(this.completed, TOTAL_SEGMENTS - 1); }
@@ -60,17 +62,18 @@ export class Creation {
     const segment = this.active;
     this.segments[segment][slot] = pair;
     const placement = { segment, slot, pair };
-    this.mutations.push(mutation(this.placements.length, placement, this.seed));
+    this.mutations.push(mutation(this.placements.length, placement, this.seed, this.mutationVersion));
     this.placements.push(placement);
     if (this.segments[segment].every(Boolean)) this.adaptations.push(adaptation(this.segments[segment] as Pair[]));
     return true;
   }
-  save(): Save { return { version: MODEL_VERSION, seed: this.seed, placements: this.placements.map(p => ({ ...p })) }; }
+  save(): Save { return { version: MODEL_VERSION, seed: this.seed, mutationVersion: this.mutationVersion, placements: this.placements.map(p => ({ ...p })) }; }
   static restore(input: unknown): Creation {
     if (!input || typeof input !== 'object') throw new Error('Invalid creation file.');
     const s = input as Save;
     if (s.version !== MODEL_VERSION || !Number.isInteger(s.seed) || s.seed < 0 || s.seed > 0xffffffff || !Array.isArray(s.placements) || s.placements.length > TOTAL_SEGMENTS * SLOTS) throw new Error('Unsupported creation file.');
-    const creation = new Creation(s.seed);
+    if (s.mutationVersion !== undefined && s.mutationVersion !== 1 && s.mutationVersion !== 2) throw new Error('Unsupported mutation catalog.');
+    const creation = new Creation(s.seed, s.mutationVersion ?? 1);
     for (const p of s.placements) {
       if (!p || p.segment !== creation.active || !creation.place(p.slot, p.pair)) throw new Error('Invalid placement history.');
     }
@@ -80,20 +83,37 @@ export class Creation {
 
 export type Interaction = 'first' | 'complement' | 'pair' | 'locked' | 'flight';
 export class Controls {
-  selected: Base[] = [];
+  slots: [Base | null, Base | null] = [null, null];
+  get selected(): Base[] { return this.slots.filter((base): base is Base => base !== null); }
   target: number | null = null;
   queued = false;
   flight: { slot: number; pair: Pair } | null = null;
-  get pair(): Pair | null { return this.selected.length === 2 ? this.selected.join('') as Pair : null; }
+  get pair(): Pair | null { return this.slots.every(Boolean) ? this.slots.join('') as Pair : null; }
   get state(): Interaction { return this.flight ? 'flight' : this.target !== null ? 'locked' : this.pair ? 'pair' : this.selected.length ? 'complement' : 'first'; }
   choose(base: Base): string {
     if (this.flight) return 'Pair in flight…';
     this.target = null; this.queued = false;
-    if (this.selected.length !== 1) this.selected = [base];
-    else if (this.selected[0] === base) this.selected = [];
-    else if (COMPLEMENT[this.selected[0]] === base) this.selected.push(base);
-    else return `${this.selected[0]} pairs with ${COMPLEMENT[this.selected[0]]}. Try its complement.`;
+    const selected = this.selected;
+    if (selected.length !== 1) this.slots = [base, null];
+    else if (selected[0] === base) this.slots = [null, null];
+    else if (COMPLEMENT[selected[0]] === base) this.slots[this.slots[0] ? 1 : 0] = base;
+    else return `${selected[0]} pairs with ${COMPLEMENT[selected[0]]}. Try its complement.`;
     return this.pair ? 'Pair ready. Click an empty chromosome rung to fire.' : this.selected.length ? `Now choose ${COMPLEMENT[base]} to complete the pair.` : 'Choose your first letter.';
+  }
+  setBase(base: Base, position: 0 | 1): string {
+    if (this.flight) return 'Pair in flight…';
+    const other = this.slots[1 - position];
+    if (other && COMPLEMENT[other] !== base) return `${other} pairs with ${COMPLEMENT[other]}. Try its complement.`;
+    this.target = null; this.queued = false;
+    this.slots[position] = base;
+    return this.pair ? 'Pair ready. Click an empty chromosome rung to fire.' : `Now fill ${this.slots[0] ? 'DOWN' : 'UP'} with ${COMPLEMENT[base]}.`;
+  }
+  deselect(base: Base): boolean {
+    if (this.flight) return false;
+    const position = this.slots.indexOf(base);
+    if (position < 0) return false;
+    this.slots[position] = null; this.target = null; this.queued = false;
+    return true;
   }
   click(slot: number | null, empty: (slot: number) => boolean): 'none' | 'locked' | 'queued' {
     if (!this.pair || this.flight || this.queued) return 'none';
@@ -105,9 +125,9 @@ export class Controls {
   launch(aligned: boolean): boolean {
     if (!this.queued || !aligned || this.target === null || !this.pair || this.flight) return false;
     this.flight = { slot: this.target, pair: this.pair };
-    this.selected = []; this.target = null; this.queued = false;
+    this.slots = [null, null]; this.target = null; this.queued = false;
     return true;
   }
-  cancel(): void { this.selected = []; this.target = null; this.queued = false; this.flight = null; }
+  cancel(): void { this.slots = [null, null]; this.target = null; this.queued = false; this.flight = null; }
   cancelLock(): void { this.target = null; this.queued = false; }
 }

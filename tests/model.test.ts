@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Creation, Controls, patternId } from '../src/model.ts';
+import { Creation, Controls, patternId, TRAITS } from '../src/model.ts';
 import { creatureMotion } from '../src/motion.ts';
 
 test('all 30 segments complete once and replay exactly', () => {
@@ -102,4 +102,57 @@ test('the fresh blob wiggles and every landed mutation changes its motion', () =
   assert.deepEqual(creatureMotion(Creation.restore(creation.save()).mutations, 1), creatureMotion(creation.mutations, 1));
   assert.equal(new Creation().mutations.length, 0);
   assert.equal(creatureMotion([], 0).name, 'Primordial wiggle');
+});
+
+test('preview holders accept explicit ordered complementary bases and reject invalid drops', () => {
+  const controls = new Controls();
+  controls.setBase('C', 1);
+  assert.deepEqual(controls.slots, [null, 'C']);
+  assert.equal(controls.pair, null);
+  assert.equal(controls.click(0, () => true), 'none');
+  assert.match(controls.setBase('C', 0), /C pairs with G/);
+  assert.deepEqual(controls.slots, [null, 'C']);
+  controls.setBase('G', 0); assert.equal(controls.pair, 'GC');
+  controls.cancel();
+  controls.setBase('G', 0);
+  assert.match(controls.setBase('T', 1), /G pairs with C/);
+  assert.deepEqual(controls.selected, ['G']);
+  controls.setBase('C', 1); assert.equal(controls.pair, 'GC');
+  controls.click(0, () => true); controls.click(0, () => true);
+  controls.setBase('G', 0);
+  assert.equal(controls.queued, false); assert.equal(controls.target, null);
+  assert.match(controls.setBase('C', 0), /C pairs with G/);
+  assert.equal(controls.pair, 'GC');
+  controls.cancel(); controls.setBase('C', 0);
+  assert.deepEqual(controls.selected, ['C']);
+  controls.setBase('G', 1); assert.equal(controls.pair, 'CG');
+  controls.click(0, () => true); controls.click(0, () => true); controls.launch(true);
+  controls.setBase('A', 0);
+  assert.equal(controls.flight?.pair, 'CG'); assert.deepEqual(controls.selected, []);
+});
+
+test('new games can grow every expanded trait and legacy saves keep their original traits', () => {
+  const creation = new Creation(42);
+  for (let i = 0; i < TRAITS.length; i++) creation.place(i % 4, 'AT');
+  assert.deepEqual(creation.mutations.map(m => m.kind), [...TRAITS]);
+  assert.equal(creation.mutations[12].kind, 'sparks');
+  assert.equal(creation.mutations[13].kind, 'tusks');
+  assert.equal(creation.mutations[14].kind, 'snozzle');
+  assert.deepEqual(Creation.restore(creation.save()).mutations, creation.mutations);
+  const legacy = Creation.restore({ version: 1, seed: 42, placements: creation.placements });
+  assert.equal(legacy.mutationVersion, 1);
+  assert.equal(legacy.mutations[12].kind, 'eyes');
+  assert.deepEqual(Creation.restore(legacy.save()).mutations, legacy.mutations);
+  assert.throws(() => Creation.restore({ ...creation.save(), mutationVersion: 3 }));
+});
+
+test('deselecting one base preserves the other and cancels a queued shot', () => {
+  const controls = new Controls(); controls.setBase('G', 0); controls.setBase('C', 1);
+  controls.click(0, () => true); controls.click(0, () => true);
+  assert.equal(controls.deselect('G'), true);
+  assert.deepEqual(controls.slots, [null, 'C']);
+  assert.equal(controls.pair, null); assert.equal(controls.launch(true), false);
+  assert.equal(controls.deselect('T'), false);
+  assert.equal(controls.deselect('C'), true);
+  assert.deepEqual(controls.selected, []);
 });
