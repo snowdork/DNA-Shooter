@@ -1,6 +1,6 @@
 # DNA Shooter admin guide
 
-This guide covers the current Mutagon browser game. See the [user guide](USER_GUIDE.md) for playing instructions or the [README](../README.md) for a quick start.
+This guide covers the current Mutagon browser game. See the [user guide](USER_GUIDE.md) for playing instructions or the [README](README.md) for a quick start.
 
 ## Hosting model
 
@@ -72,7 +72,7 @@ For a manual check, run `npm run preview`, open its printed URL, and verify:
 3. Four placements complete one quadra-chrome, award a 400-point bonus, and add one adaptation. It shakes and sparkles before drifting down to the master chain; the next set enters from above. Any empty chain reaching the bottom ends the run, even with other chains filled.
 4. Pause freezes the chain and projectiles. A queued, unlaunched shot is cancelled and needs a fresh fire action after resuming.
 5. Export, restart, and load restore progress and creature appearance. Loading leaves play paused.
-6. Keyboard controls, reduced motion, and resizing remain usable. With the current 10-quadra-chrome goal, a full run has 40 placements, 10 adaptations, and 8,000 points. New games begin with a small green glob and draw random mutations as it grows.
+6. Keyboard controls, reduced motion, and resizing remain usable. With the current 10-quadra-chrome goal, a full run has 40 placements, 10 adaptations, and 8,000 points. New games begin with a small green glob and develop compatible traits through staged growth.
 
 ## Release gate
 
@@ -131,7 +131,7 @@ To roll back, point `current` back to the previous complete release. Preserve ne
 
 Keep release archives, the source revision and lockfile used for each build, and VPS virtual-host/TLS configuration. There is no server-side player progress to back up. Tell players to export before restarting or refreshing; live progress exists only in browser memory.
 
-Creation exports currently use model version **1** and contain the seed, mutation rules version, and ordered placements. Mutation version **3** draws random traits and colors reproducibly; versions **1** and **2** retain their original sequential rules. The loader validates the history and accepts files up to **32,768 bytes (32 KiB)**. Selection, locks, in-flight shots, animation time, and settings are not saved. Preserve version compatibility when changing creation rules; unsupported files are rejected rather than migrated automatically.
+Creation exports currently use model version **1** and contain the seed, mutation rules version, and ordered placements. Mutation version **4** uses staged growth, seeded body plans, and related pigments. Version **3** retains unrestricted random traits; versions **1** and **2** retain their original sequential rules. The loader validates the history and accepts files up to **32,768 bytes (32 KiB)**. Selection, locks, in-flight shots, animation time, and settings are not saved. Preserve version compatibility when changing creation rules; unsupported files are rejected rather than migrated automatically.
 
 ## Performance and troubleshooting
 
@@ -153,3 +153,7 @@ Phaser is a separately hashed engine chunk. Its first download remains roughly 3
 | Export has less progress than expected | Only completed impacts are saved; wait for a shot to land before exporting. |
 
 Client errors appear in the browser console. HTTP requests and errors appear in your web server's configured logs; there is no separate game-service log. Documents under `doc/design/` include future modes and are not the operational feature list.
+
+## Developmental gameplay update
+
+New games default to mutation rules version 4. Export model version remains 1; rules versions 1–3 load with their original histories. Earlier app releases cannot load version 4 rules, so keep the newer build available when rolling back if players need to reload these exports. The build remains entirely static. See [research and gameplay notes](RESEARCH_AND_GAMEPLAY.md).

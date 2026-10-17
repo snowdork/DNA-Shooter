@@ -15,7 +15,7 @@ export function missedChain(pattern: readonly (Pair | null)[], chainY: readonly 
 }
 export interface Placement { segment: number; slot: number; pair: Pair }
 export interface Adaptation { id: number; name: string; pattern: Pair[] }
-type MutationVersion = 1 | 2 | 3;
+type MutationVersion = 1 | 2 | 3 | 4 | 5;
 export interface Save { version: number; seed: number; mutationVersion?: MutationVersion; placements: Placement[] }
 
 export function isPair(value: unknown): value is Pair {
@@ -33,7 +33,18 @@ export function adaptation(pattern: Pair[]): Adaptation {
 }
 
 export const TRAITS = ['eyes', 'legs', 'bands', 'tail', 'antennae', 'tongue', 'gills', 'wings', 'horns', 'tentacles', 'scales', 'spots', 'sparks', 'tusks', 'snozzle', 'paws', 'ears', 'whiskers', 'fins', 'beak', 'claws', 'plumes'] as const;
-export type Trait = typeof TRAITS[number];
+export const EXTRA_TRAITS = ['hands', 'humanEars', 'nose', 'antlers', 'carapace', 'feathers', 'heart', 'lightSacs', 'eyeStalks'] as const;
+export type Trait = typeof TRAITS[number] | typeof EXTRA_TRAITS[number];
+const EXPANDED_TRAITS: readonly Trait[] = [...TRAITS, ...EXTRA_TRAITS];
+export const BODY_PLANS = [
+  { name: 'Tidepool', movement: 'fins', sense: 'antennae', detail: 'gills', finish: 'tentacles' },
+  { name: 'Woodland', movement: 'legs', sense: 'ears', detail: 'whiskers', finish: 'horns' },
+  { name: 'Canopy', movement: 'wings', sense: 'antennae', detail: 'beak', finish: 'plumes' },
+] as const;
+export function bodyPlan(seed: number) { return BODY_PLANS[(seed >>> 0) % BODY_PLANS.length]; }
+export function developmentStage(count: number): string {
+  return count === 0 ? 'Unformed blob' : count < 4 ? 'Living tissue' : count < 8 ? 'Sensing' : count < 20 ? 'Body plan' : count < TOTAL_SEGMENTS * SLOTS ? 'Specializing' : 'Mature specimen';
+}
 export interface Mutation { id: number; kind: Trait; color: string; name: string; variant: number; pair: Pair; segment: number; slot: number }
 const PIGMENTS = [
   { name: 'Emerald', color: '#78ff76' }, { name: 'Cobalt', color: '#64a8ff' },
@@ -49,10 +60,20 @@ function randomWord(value: number): number {
 function mutation(index: number, placement: Placement, seed: number, mutationVersion: MutationVersion): Mutation {
   const orientation = PAIRS.indexOf(placement.pair as typeof PAIRS[number]);
   let kindIndex: number, pigmentIndex: number, variant: number;
-  if (mutationVersion === 3) {
+  if (mutationVersion >= 3) {
     const draw = randomWord(seed ^ Math.imul(index + 1, 0x9e3779b9) ^ Math.imul(placement.slot + 1, 0x85ebca6b) ^ Math.imul(orientation + 1, 0xc2b2ae35));
-    kindIndex = draw % TRAITS.length;
-    pigmentIndex = randomWord(draw ^ 0xa511e9b3) % PIGMENTS.length;
+    kindIndex = draw % (mutationVersion === 5 ? EXPANDED_TRAITS.length : TRAITS.length);
+    if (mutationVersion === 4) {
+      const plan = bodyPlan(seed);
+      const pool: readonly Trait[] = index < 4 ? ['bands', 'spots'] : index < 8 ? ['eyes', plan.sense]
+        : index < 20 ? [plan.movement, 'tail', plan.detail, 'eyes']
+        : ['bands', 'spots', 'scales', plan.finish, plan.detail, plan.movement];
+      // Establish sensory and locomotor structures before elaborating them.
+      const kind = index === 4 ? 'eyes' : index === 8 ? plan.movement : pool[draw % pool.length];
+      kindIndex = (TRAITS as readonly Trait[]).indexOf(kind);
+    }
+    pigmentIndex = mutationVersion === 4 ? (seed + (draw % 5 === 0 ? 1 : 0)) % PIGMENTS.length
+      : randomWord(draw ^ 0xa511e9b3) % PIGMENTS.length;
     variant = randomWord(draw ^ 0x63d83595);
   } else {
     const traitCount = mutationVersion === 1 ? 12 : TRAITS.length;
@@ -60,9 +81,9 @@ function mutation(index: number, placement: Placement, seed: number, mutationVer
     pigmentIndex = (kindIndex + Math.floor(index / traitCount) + orientation) % PIGMENTS.length;
     variant = (seed + index * 17 + placement.slot * 7 + orientation * 11) >>> 0;
   }
-  const kind = TRAITS[kindIndex];
+  const kind = (mutationVersion === 5 ? EXPANDED_TRAITS : TRAITS)[kindIndex];
   const pigment = PIGMENTS[pigmentIndex];
-  return { id: index + 1, kind, color: pigment.color, name: `${pigment.name} ${kind} · ${String(index + 1).padStart(3, '0')}`, variant, pair: placement.pair, segment: placement.segment, slot: placement.slot };
+  return { id: index + 1, kind, color: pigment.color, name: `${pigment.name} ${{ hands: 'human hands', humanEars: 'human ears', nose: 'human nose', antlers: 'stag antlers', carapace: 'beetle shell', feathers: 'raptor feathers', heart: 'alien pulse heart', lightSacs: 'alien light sacs', eyeStalks: 'snail eye stalks' }[kind as typeof EXTRA_TRAITS[number]] ?? kind} · ${String(index + 1).padStart(3, '0')}`, variant, pair: placement.pair, segment: placement.segment, slot: placement.slot };
 }
 
 export class Creation {
@@ -72,7 +93,7 @@ export class Creation {
   segments: (Pair | null)[][] = Array.from({ length: TOTAL_SEGMENTS }, () => Array(SLOTS).fill(null));
   adaptations: Adaptation[] = [];
   mutations: Mutation[] = [];
-  constructor(seed = Math.floor(Math.random() * 0x100000000), mutationVersion: MutationVersion = 3) {
+  constructor(seed = Math.floor(Math.random() * 0x100000000), mutationVersion: MutationVersion = 5) {
     this.seed = seed >>> 0;
     this.mutationVersion = mutationVersion;
   }
@@ -97,7 +118,7 @@ export class Creation {
     if (!input || typeof input !== 'object') throw new Error('Invalid creation file.');
     const s = input as Save;
     if (s.version !== MODEL_VERSION || !Number.isInteger(s.seed) || s.seed < 0 || s.seed > 0xffffffff || !Array.isArray(s.placements) || s.placements.length > TOTAL_SEGMENTS * SLOTS) throw new Error('Unsupported creation file.');
-    if (s.mutationVersion !== undefined && ![1, 2, 3].includes(s.mutationVersion)) throw new Error('Unsupported mutation catalog.');
+    if (s.mutationVersion !== undefined && ![1, 2, 3, 4, 5].includes(s.mutationVersion)) throw new Error('Unsupported mutation catalog.');
     const creation = new Creation(s.seed, s.mutationVersion ?? 1);
     for (const p of s.placements) {
       if (!p || p.segment !== creation.active || !creation.place(p.slot, p.pair)) throw new Error('Invalid placement history.');

@@ -2,8 +2,8 @@ import Phaser from 'phaser';
 import { LabAudio } from './audio';
 import { animateCreature } from './motion';
 import { creatureState } from './creature-state';
-import { COLORS, belongsToSide, type Side } from './bases';
-import { BASES, Creation, Controls, missedChain, SLOTS, TOTAL_SEGMENTS, type Base, type Mutation } from './model';
+import { COLORS } from './bases';
+import { Creation, Controls, bodyPlan, developmentStage, missedChain, SLOTS, TOTAL_SEGMENTS, type Base, type Pair, type Mutation } from './model';
 
 export const W = 1280;
 export const H = 650;
@@ -11,9 +11,6 @@ const ENTRY_OFFSET = -290;
 const EXIT_Y = 580;
 const CELEBRATION_SECONDS = 1;
 const COMPLETION_DRIFT_SPEED = 250;
-const GUN_X = [47, 119, 640, 712];
-const SHOOTER_SCALE = .52;
-export const SHOOTER_RADIUS = 43 * SHOOTER_SCALE;
 export interface GameHooks {
   changed: () => void;
   notice: (text: string) => void;
@@ -32,7 +29,6 @@ export class Field extends Phaser.Scene {
   elapsed = 0;
   offset = ENTRY_OFFSET;
   aligned = false;
-  angles = GUN_X.map(() => -Math.PI / 2);
   transition = 0;
   celebration = 0;
   linkedSegment: number | null = null;
@@ -48,6 +44,7 @@ export class Field extends Phaser.Scene {
   private hooks: GameHooks;
   private lastReady = false;
   private background!: HTMLCanvasElement;
+  private presentPending = false;
   private slotPositions: Point[] = Array.from({ length: SLOTS }, () => ({ x: 0, y: 0 }));
   private strandPoints: Point[][] = Array.from({ length: 2 }, () => Array.from({ length: 150 }, () => ({ x: 0, y: 0 })));
 
@@ -80,7 +77,7 @@ export class Field extends Phaser.Scene {
   }
   private resizeField(): void {
     const { width, height } = this.scale.gameSize;
-    if (this.frame.width === width && this.frame.height === height) return;
+    if (this.frame.width === width && this.frame.height === height) { this.repaint(); return; }
     this.aspectCorrection = (width / W) / (height / H);
     this.frame.setSize(width, height);
     this.frameImage.setSizeToFrame().setDisplaySize(width, height);
@@ -102,7 +99,7 @@ export class Field extends Phaser.Scene {
     this.labAudio.setActive(false);
     this.creation = creation; this.failed = false; this.controls.cancel(); this.offset = ENTRY_OFFSET; this.elapsed = 0;
     this.shownSegment = creation.active; this.transition = 0; this.celebration = 0; this.linkedSegment = null; this.burst = 0;
-    this.aligned = false; this.lastReady = false; this.shotTime = 0; this.angles.fill(-Math.PI / 2);
+    this.aligned = false; this.lastReady = false; this.shotTime = 0;
     this.dropTarget = null; this.shotOrigins = [];
     this.repaint(); this.hooks.changed();
   }
@@ -124,44 +121,23 @@ export class Field extends Phaser.Scene {
     this.controls.cancelLock(); this.aligned = false;
     this.repaint(); this.hooks.changed();
   }
-  choose(base: Base): void {
-    if (this.paused || this.creation.done || this.failed || this.transition) return;
-    this.hooks.notice(this.controls.choose(base));
-    if (this.controls.pair) this.hooks.notice(`${this.controls.pair} ready — click an empty quadra-chrome chain to fire.`);
-    this.hooks.changed();
-  }
-  assemble(base: Base, position: 0 | 1): boolean {
+  preparePair(pair: Pair): boolean {
     if (this.paused || this.creation.done || this.failed || this.transition || this.controls.flight) return false;
-    this.hooks.notice(this.controls.setBase(base, position)); this.hooks.changed();
-    return this.controls.slots[position] === base;
-  }
-  deselect(base: Base): void {
-    if (this.paused || this.creation.done || this.failed || this.transition) return;
-    if (this.controls.deselect(base)) {
-      this.aligned = false;
-      this.hooks.notice(`${base} deselected. ${this.controls.selected.length ? 'Complete the remaining pair.' : 'Choose a new base.'}`);
-      this.repaint(); this.hooks.changed();
-    }
-  }
-  clearSide(side: Side): void {
-    if (this.controls.flight) return;
-    const first = this.controls.selected[0];
-    if (first && belongsToSide(first, side)) {
-      this.controls.cancel(); this.aligned = false;
-      this.hooks.notice(`${side.toUpperCase()} preview cleared. Choose a new UP base.`);
-      this.repaint(); this.hooks.changed();
-    }
+    this.controls.cancel();
+    this.controls.setBase(pair[0] as Base, 0); this.controls.setBase(pair[1] as Base, 1);
+    this.aligned = false;
+    this.hooks.notice(`${pair} ready — drag this pair onto an empty chain, or click a chain. UP ${pair[0]}, DOWN ${pair[1]}.`);
+    this.hooks.changed(); return true;
   }
   target(slot: number | null): void {
     if (this.paused || this.creation.done || this.failed || this.transition) return;
     let result = this.controls.click(slot, i => !this.creation.segments[this.creation.active][i]);
     if (result === 'locked') result = this.controls.click(slot, i => !this.creation.segments[this.creation.active][i]);
-    if (result === 'queued') this.hooks.notice(this.aligned ? 'Launching pair…' : 'Shot queued — lining up the cannons…');
-    else if (!this.controls.pair && !this.controls.flight) this.hooks.notice('Fill both UP and DOWN with a matching pair before choosing a chain.');
+    if (result === 'queued') this.hooks.notice(this.aligned ? 'Launching pair…' : 'Shot queued — waiting for the chain to enter…');
+    else if (!this.controls.pair && !this.controls.flight) this.hooks.notice('Choose TA, AT, CG, or GC before choosing a chain.');
     this.hooks.changed();
   }
-  launcherX(base: Base): number { return GUN_X[BASES.indexOf(base)]; }
-  launcherY(_base: Base): number { return 420; }
+
   positions(): Point[] {
     for (let i = 0; i < SLOTS; i++) {
       this.slotPositions[i].y = 130 + i * 88 + this.offset;
@@ -187,28 +163,16 @@ export class Field extends Phaser.Scene {
         this.draw(); this.hooks.changed(); this.game.loop.sleep(); return;
       }
     }
-    const selected = this.controls.selected;
     const lock = this.controls.target;
-    this.aligned = lock !== null;
-    if (lock !== null) {
-      const p = this.positions()[lock];
-      if (p.y < 49 || p.y >= EXIT_Y) this.aligned = false;
-      GUN_X.forEach((x, i) => {
-        if (!selected.includes(BASES[i])) return;
-        const desired = Math.atan2((p.y - this.launcherY(BASES[i])) / this.aspectCorrection, p.x - x);
-        const diff = Phaser.Math.Angle.Wrap(desired - this.angles[i]);
-        this.angles[i] += this.reduced ? diff : Math.max(-dt * 5, Math.min(dt * 5, diff));
-        if (Math.abs(diff) > .035 && !this.reduced) this.aligned = false;
-      });
-    }
+    const target = lock === null ? null : this.positions()[lock];
+    this.aligned = !!target && target.y >= 49 && target.y < EXIT_Y;
     if (this.aligned !== this.lastReady) { this.lastReady = this.aligned; this.hooks.changed(); }
-    const origins = this.controls.queued && this.aligned ? selected.map(base => {
-      const i = BASES.indexOf(base);
-      return { x: GUN_X[i] + Math.cos(this.angles[i]) * 78 * SHOOTER_SCALE, y: this.launcherY(BASES[i]) + Math.sin(this.angles[i]) * 78 * SHOOTER_SCALE * this.aspectCorrection };
-    }) : [];
     if (this.controls.launch(this.aligned)) {
       this.labAudio.shoot();
-      this.shotOrigins = origins; this.shotTime = 0; this.hooks.changed();
+      const pair = this.controls.flight!.pair;
+      const originX = pair.includes('A') ? 82 : 680;
+      const originY = pair === 'TA' || pair === 'CG' ? 210 : 380;
+      this.shotOrigins = [{ x: originX - 12, y: originY }, { x: originX + 12, y: originY }]; this.shotTime = 0; this.hooks.changed();
     }
     if (this.controls.flight) {
       this.shotTime += dt;
@@ -292,11 +256,20 @@ export class Field extends Phaser.Scene {
   private repaint(): void {
     if (!this.ctx) return;
     this.draw();
-    // Sleeping loops still need one visible render after load or settings changes.
-    if (this.paused || !this.game.loop.running) {
-      this.game.renderer.preRender();
-      this.game.scene.render(this.game.renderer);
-      this.game.renderer.postRender();
+    // The scene is a single canvas image. Present it directly while sleeping;
+    // Phaser's normal renderer owns presentation again as soon as play resumes.
+    if ((this.paused || !this.game.loop.running) && !this.presentPending) {
+      this.presentPending = true;
+      requestAnimationFrame(() => {
+        this.presentPending = false;
+        if (!this.paused && this.game.loop.running) return;
+        if (!this.frame.canvas.width || !this.frame.canvas.height || !this.game.canvas.width || !this.game.canvas.height) return;
+        const display = this.game.canvas.getContext('2d')!;
+        display.save(); display.setTransform(1, 0, 0, 1, 0, 0);
+        display.globalAlpha = 1; display.globalCompositeOperation = 'source-over';
+        display.drawImage(this.frame.canvas, 0, 0, this.game.canvas.width, this.game.canvas.height);
+        display.restore();
+      });
     }
   }
   private draw(): void {
@@ -310,7 +283,7 @@ export class Field extends Phaser.Scene {
       const alpha = .15 + .12 * Math.sin(this.elapsed + i);
       this.ellipse(x, y, i % 5 === 0 ? 2 : 1, i % 5 === 0 ? 2 : 1, `rgba(110,205,255,${alpha})`);
     }
-    this.drawCreature(); this.drawHelix(); this.drawCannons(); this.drawShot();
+    this.drawCreature(); this.drawHelix(); this.drawShot();
     if (this.failed || this.creation.done && !this.transition) {
       c.fillStyle = '#040b15dc'; c.fillRect(210, 225, 340, 155);
       this.text(this.failed ? 'CONTAINMENT FAILED' : 'GENOME COMPLETE', 380, 280, 23, this.failed ? '#ff8b9f' : '#b9ef9c', 'center');
@@ -336,13 +309,15 @@ export class Field extends Phaser.Scene {
     c.save(); c.beginPath(); c.rect(785, 34, 465, 548); c.clip();
     const x = 1010, y = 307;
     const growthCount = mutations.length - (latest && !this.reduced ? this.burst / .7 : 0);
-    const growth = .55 + Math.min(.45, growthCount * .04);
+    const maturity = Math.max(0, growthCount) / (TOTAL_SEGMENTS * SLOTS);
+    const growth = .48 + .52 * Math.sqrt(maturity);
     this.ellipse(x, y + 100, (150 + motion.bob) * growth, 17 * growth, '#55ef8120');
     c.translate(x + motion.drift, y + 45 + motion.bob);
     c.rotate(motion.tilt); c.transform(1, 0, motion.shear, 1, 0, 0);
     const creatureScale = Math.min(1.5, 1.5 / this.aspectCorrection) * growth;
     c.scale(creatureScale * motion.scaleX, creatureScale * this.aspectCorrection * motion.scaleY); c.translate(-x, -y - 45);
-    const radius = 67 + Math.min(22, mutations.length * .45), height = 55 + Math.min(14, mutations.length * .2);
+    const radius = 67 + 22 * maturity, height = 55 + 14 * maturity;
+    const anatomy = this.creation.mutationVersion >= 4 ? state.current : state;
     const body = new Path2D(); body.moveTo(x - radius, y + 36);
     body.bezierCurveTo(x - radius - 12, y - 20, x - radius * .7, y - height, x - 12, y - height);
     body.bezierCurveTo(x + radius * .9, y - height - 15, x + radius + 22, y - 9, x + radius, y + 36);
@@ -350,12 +325,56 @@ export class Field extends Phaser.Scene {
     body.closePath();
     // Each hit persists in history; repeated traits grow new colored variants.
     const families = new Map<string, number>();
-    for (const m of state.appendages) {
+    for (const m of anatomy.appendages) {
       const n = families.get(m.kind) ?? 0; families.set(m.kind, n + 1);
       this.mutationStyle(m, latest, x, y, () => {
         const sway = this.reduced ? 0 : Math.sin(this.elapsed * (2 + motion.tempo * .3 + m.id % 5 * .2) + m.variant) * (m.kind === 'wings' ? 11 : m.kind === 'tail' || m.kind === 'tentacles' ? 10 : 5);
         const side = n % 2 ? -1 : 1;
-        if (m.kind === 'legs' || m.kind === 'paws') {
+        if (m.kind === 'hands') {
+          for (const sign of [-1, 1]) {
+            const wrist = x + sign * 121, yy = y + 38 + sway;
+            this.line([{ x: x + sign * 54, y: y + 16 }, { x: x + sign * 95, y: y + 57 }, { x: wrist, y: yy }], '#d9a582', 13);
+            this.ellipse(wrist + sign * 9, yy - 5, 13, 17, '#edbc99', '#916553');
+            for (let finger = 0; finger < 4; finger++) {
+              const xx = wrist + sign * (finger * 6 - 1);
+              this.line([{ x: xx, y: yy - 10 }, { x: xx + sign * 3, y: yy - 28 - Math.sin(finger / 3 * Math.PI) * 7 }], '#edbc99', 5);
+            }
+            this.line([{ x: wrist - sign * 2, y: yy + 1 }, { x: wrist - sign * 15, y: yy - 12 }], '#edbc99', 6);
+          }
+        } else if (m.kind === 'humanEars') {
+          for (const sign of [-1, 1]) {
+            const xx = x + sign * (radius + 5);
+            this.ellipse(xx, y - 8, 18, 28, '#e9b89c', '#9e6e59');
+            this.ellipse(xx + sign * 3, y - 9, 9, 17, '#bd8379', '#f6d0b5');
+            this.ellipse(xx - sign * 2, y - 4, 4, 7, '#674c4b');
+          }
+        } else if (m.kind === 'antlers') {
+          for (const sign of [-1, 1]) {
+            this.line([{ x: x + sign * 38, y: y - 38 }, { x: x + sign * 61, y: y - 91 }, { x: x + sign * 87, y: y - 128 + sway }], '#bea685', 8);
+            for (let j = 0; j < 3; j++) this.line([{ x: x + sign * (48 + j * 12), y: y - 64 - j * 20 }, { x: x + sign * (78 + j * 13), y: y - 69 - j * 24 }, { x: x + sign * (83 + j * 13), y: y - 89 - j * 24 }], '#dac8a8', 5);
+          }
+        } else if (m.kind === 'carapace') {
+          this.ellipse(x, y - 7, radius + 17, 71, '#294a52', m.color);
+          for (const sign of [-1, 1]) {
+            this.ellipse(x + sign * 37, y - 13, 35, 57, m.color, '#efffff80');
+            for (let j = 0; j < 3; j++) this.line([{ x: x + sign * 10, y: y - 43 + j * 27 }, { x: x + sign * 62, y: y - 25 + j * 23 }], '#163d4760', 3);
+          }
+        } else if (m.kind === 'feathers') {
+          for (const sign of [-1, 1]) for (let j = 0; j < 6; j++) {
+            const xx = x + sign * (80 + j * 10), yy = y - 50 + j * 18 + sway;
+            this.ellipse(xx, yy, 10, 31 - j * 2, m.color, '#fff4d2aa');
+            this.line([{ x: xx, y: yy - 22 }, { x: xx, y: yy + 22 }], '#283b4c', 1.5);
+          }
+        } else if (m.kind === 'eyeStalks') {
+          for (const sign of [-1, 1]) {
+            const xx = x + sign * 48 + sway, yy = y - 105;
+            this.line([{ x: x + sign * 35, y: y - 35 }, { x: xx, y: yy }], m.color, 10);
+            this.ellipse(xx, yy, 18, 20, '#eef7dd', m.color);
+            this.ellipse(xx + motion.gaze, yy, 10, 12, m.color);
+            this.ellipse(xx + motion.gaze, yy, 4, 9, '#142331');
+            this.ellipse(xx - 4, yy - 6, 3, 4, '#ffffff');
+          }
+        } else if (m.kind === 'legs' || m.kind === 'paws') {
           for (const sign of [-1, 1]) {
             const xx = x + sign * (24 + n * 15);
             const step = this.reduced ? 0 : Math.sin(this.elapsed * motion.tempo * 1.35 + sign * Math.PI / 2 + m.variant) * 7;
@@ -441,16 +460,16 @@ export class Field extends Phaser.Scene {
       });
     }
     const gradient = c.createRadialGradient(x - 25, y - 25, 5, x, y, radius + 15);
-    gradient.addColorStop(0, '#c4ff8c'); gradient.addColorStop(.45, '#71c939'); gradient.addColorStop(1, '#205f31');
-    c.save(); c.shadowColor = '#91ff70'; c.shadowBlur = 23; c.fillStyle = gradient; c.fill(body); c.restore();
+    gradient.addColorStop(0, '#d3ecab'); gradient.addColorStop(.32, '#8abf65'); gradient.addColorStop(.75, '#467a48'); gradient.addColorStop(1, '#203e35');
+    c.save(); c.shadowColor = '#91ff70'; c.shadowBlur = 8; c.fillStyle = gradient; c.fill(body); c.restore();
     // Pigment bands, scales and spots stay inside the body silhouette.
     c.save(); c.clip(body);
-    for (const m of state.surface) {
+    for (const m of anatomy.surface) {
       this.mutationStyle(m, latest, x, y, () => {
         const lane = state.lanes.get(m)!;
         if (m.kind === 'bands') {
           c.save(); c.translate(x, y); c.rotate((m.variant % 3 - 1) * .15);
-          c.fillStyle = m.color; c.globalAlpha = .8;
+          c.fillStyle = m.color; c.globalAlpha = this.creation.mutationVersion === 4 ? .35 : .8;
           c.fillRect(-radius - 20, -43 + lane * 25, radius * 2 + 40, 13 + m.variant % 5); c.restore();
         } else for (let i = 0; i < 7; i++) {
           const xx = x + Math.sin(i * 2.4 + m.variant) * radius * .75;
@@ -460,29 +479,55 @@ export class Field extends Phaser.Scene {
         }
       });
     }
-    c.restore(); c.strokeStyle = '#c2ff9e'; c.lineWidth = 2.5; c.stroke(body);
-    const eyeMutations = state.eyes, iris = eyeMutations.at(-1)?.color ?? '#658bda';
+    c.restore(); c.strokeStyle = '#c1db9c'; c.lineWidth = 1.5; c.stroke(body);
+    // A soft membrane rim and shaded underside give the body volume without a neon outline.
+    c.save(); c.clip(body);
+    const shade = c.createLinearGradient(0, y, 0, y + 66);
+    shade.addColorStop(0, '#092a2100'); shade.addColorStop(1, '#092a2180');
+    c.fillStyle = shade; c.fillRect(x - radius - 20, y, radius * 2 + 40, 80);
+    c.restore();
+    const eyeMutations = anatomy.eyes, iris = eyeMutations.at(-1)?.color ?? '#658bda';
     if (eyeMutations.length) for (const sign of [-1, 1]) {
       const xx = x + sign * 25;
-      this.ellipse(xx, y - 5, 19, 23, '#f7fff0');
-      this.ellipse(xx + 2 + motion.gaze, y - 3, 12, 16, iris, '#1b3a32');
-      this.ellipse(xx + 3 + motion.gaze, y - 2, 5, 10, '#092137'); this.ellipse(xx - 2, y - 12, 5, 6, '#ffffff');
+      this.ellipse(xx, y - 5, this.creation.mutationVersion === 4 ? 13 : 19, this.creation.mutationVersion === 4 ? 16 : 23, '#d7e7bf');
+      this.ellipse(xx + 2 + motion.gaze, y - 3, 9, 12, iris, '#1b3a32');
+      this.ellipse(xx + 3 + motion.gaze, y - 2, 5, 10, '#092137'); this.ellipse(xx - 2, y - 10, 3, 4, '#ffffff');
     }
-    eyeMutations.forEach((m, i) => this.mutationStyle(m, latest, x, y, () => {
+    (this.creation.mutationVersion === 4 ? [] : eyeMutations).forEach((m, i) => this.mutationStyle(m, latest, x, y, () => {
       const xx = x - 43 + i * 28, yy = y - 43 - (i % 2) * 7;
       this.ellipse(xx, yy, 10, 12, '#f8fff0'); this.ellipse(xx, yy, 6, 8, m.color); this.ellipse(xx, yy, 2.5, 6, '#122333');
     }));
     if (mutations.length) {
       c.beginPath(); c.arc(x, y + 23, 11, .2, Math.PI - .2); c.strokeStyle = '#173e28'; c.lineWidth = 3; c.stroke();
     }
-    state.tongues.forEach((m, i) => this.mutationStyle(m, latest, x, y, () => {
+    anatomy.tongues.forEach((m, i) => this.mutationStyle(m, latest, x, y, () => {
       const flick = this.reduced ? 0 : Math.sin(this.elapsed * (motion.tempo + i) * 2) * 9;
       this.line([{ x, y: y + 32 }, { x: x + 10 + i * 5, y: y + 57 }, { x: x - 20 - i * 12 + flick, y: y + 70 + i * 5 }], m.color, 9);
     }));
-    for (const m of state.face) {
+    for (const m of anatomy.face) {
       this.mutationStyle(m, latest, x, y, () => {
         const breathe = this.reduced ? 0 : Math.sin(this.elapsed * motion.tempo + m.variant) * 4;
-        if (m.kind === 'tusks') {
+        if (m.kind === 'nose') {
+          c.beginPath(); c.moveTo(x - 6, y - 15); c.quadraticCurveTo(x - 9, y + 4, x - 14, y + 12);
+          c.quadraticCurveTo(x, y + 26, x + 17, y + 12); c.quadraticCurveTo(x + 6, y + 2, x + 6, y - 15);
+          c.fillStyle = '#e7b196'; c.fill(); c.strokeStyle = '#a16a59'; c.lineWidth = 2; c.stroke();
+          for (const sign of [-1, 1]) this.ellipse(x + sign * 8, y + 13, 4, 2.5, '#704d48');
+        } else if (m.kind === 'heart') {
+          const beat = this.reduced ? 1 : 1 + Math.pow(Math.max(0, Math.sin(this.elapsed * 6)), 5) * .13;
+          c.save(); c.translate(x + 23, y + 30); c.scale(beat, beat);
+          this.ellipse(-6, -3, 15, 20, '#a8407f', '#ffd0df');
+          this.ellipse(10, 0, 13, 18, '#e367a9', '#ffd0df');
+          for (let j = 0; j < 3; j++) this.line([{ x: -4 + j * 7, y: -14 }, { x: -10 + j * 12, y: -28 }], '#7bf7dc', 4);
+          this.line([{ x: -9, y: 1 }, { x: 0, y: 7 }, { x: 9, y: -4 }], '#fff1df', 2);
+          c.restore();
+        } else if (m.kind === 'lightSacs') {
+          for (let j = 0; j < 5; j++) {
+            const xx = x - 43 + j * 21, yy = y + 31 + Math.sin(j) * 9;
+            c.save(); c.shadowColor = m.color; c.shadowBlur = this.reduced ? 6 : 10 + breathe * 2;
+            this.ellipse(xx, yy, 9, 13, '#173c52', m.color);
+            this.ellipse(xx, yy, 4, 7, '#e5ffba'); c.restore();
+          }
+        } else if (m.kind === 'tusks') {
           for (const sign of [-1, 1]) {
             c.beginPath(); c.moveTo(x + sign * 15, y + 25);
             c.bezierCurveTo(x + sign * 20, y + 75, x + sign * 65, y + 70, x + sign * 61, y - 1 + breathe);
@@ -513,6 +558,12 @@ export class Field extends Phaser.Scene {
       }
     }
     c.restore();
+    this.text(developmentStage(mutations.length).toUpperCase(), 1010, 65, 14, '#d7e9bf', 'center');
+    const planLabel = this.creation.mutationVersion === 4 ? `${bodyPlan(this.creation.seed).name} body plan · fictional development` : this.creation.mutationVersion === 5 ? 'Hybrid anatomy · animal / human / alien' : 'Legacy specimen · fictional development';
+    this.text(planLabel, 1010, 85, 10, '#9bb7b8', 'center');
+    this.round(870, 544, 280, 4, 2); c.fillStyle = '#ffffff18'; c.fill();
+    if (mutations.length) { this.round(870, 544, 280 * mutations.length / (TOTAL_SEGMENTS * SLOTS), 4, 2); c.fillStyle = '#b5db8d'; c.fill(); }
+    this.text(`${mutations.length} / ${TOTAL_SEGMENTS * SLOTS} growth steps`, 1010, 568, 11, '#b7cebf', 'center');
     // Thin translucent containment bars let the specimen's colors show through.
     for (let xx = 798; xx <= 1242; xx += 47) {
       this.line([{ x: xx, y: 36 }, { x: xx, y: 582 }], '#c8f3ff25', 2);
@@ -597,7 +648,7 @@ export class Field extends Phaser.Scene {
         points[i].x = this.helixCenter(y) + Math.cos(phase + strand * Math.PI) * this.helixRadius(y) + ripple;
         points[i].y = y;
       }
-      this.line(points, strand ? '#ff72c9' : '#65aaff', completed ? 7 : 5, completed ? 22 : this.reduced ? 0 : 12);
+      this.line(points, strand ? '#ff8ccf' : '#63ecd3', completed ? 7 : 5, completed ? 22 : this.reduced ? 0 : 12);
       this.line(points, strand ? '#ffd2ee' : '#d4e7ff', 1.3);
     }
     pos.forEach((p, i) => {
@@ -613,10 +664,18 @@ export class Field extends Phaser.Scene {
         c.save();
         if (completed) { c.shadowColor = '#d5ff9d'; c.shadowBlur = this.reduced ? 12 : 15 + Math.sin(celebratingTime * 18 + i) * 7; }
         this.round(p.x - 36, p.y - 31 + j * 34, 72, 28, 9);
-        c.fillStyle = completed ? '#31554a' : pair ? '#183a3c' : '#0b1728'; c.fill();
+        c.fillStyle = completed ? '#31554a' : pair ? '#183a3c' : '#152b38'; c.fill();
         c.strokeStyle = pair ? COLORS[pair[j] as Base] : '#7895a8'; c.lineWidth = 2; c.stroke();
-        this.text(pair ? pair[j] : '-', p.x, p.y - 9 + j * 34, 20, pair ? COLORS[pair[j] as Base] : '#7895a8', 'center');
+        this.text(pair ? pair[j] : j ? '↓' : '↑', p.x, p.y - 9 + j * 34, 20, pair ? COLORS[pair[j] as Base] : '#7895a8', 'center');
         c.restore();
+      }
+      if (pair) {
+        const bonds = pair.includes('A') ? 2 : 3;
+        for (let bond = 0; bond < bonds; bond++) {
+          const xx = p.x + (bond - (bonds - 1) / 2) * 10;
+          this.line([{ x: xx, y: p.y - 2 }, { x: xx, y: p.y + 2 }], '#d6e6bf', 2);
+        }
+        this.text(`${bonds} H bonds`, p.x + 50, p.y + 4, 10, '#b3c6b8');
       }
       if (completed) this.drawCompletionSparks(p, i, celebratingTime, celebrating);
       this.text(String(i + 1), 197, p.y + 5, 12, '#91b3c6', 'center');
@@ -659,72 +718,6 @@ export class Field extends Phaser.Scene {
       c.fillStyle = shine; c.fillRect(x - 15, p.y - 31, 30, 62); c.restore();
     }
     c.restore();
-  }
-  private drawCannons(): void {
-    const c = this.ctx;
-    for (const [x, width, bases] of [[6, 152, ['A', 'T']], [602, 156, ['C', 'G']]] as const) {
-      const active = bases.some(base => this.controls.selected.includes(base) || this.controls.flight?.pair.includes(base));
-      this.round(x, 178, width, 330, 16); c.fillStyle = '#102833cc'; c.fill();
-      c.strokeStyle = active ? '#b9ef9caa' : '#527b8a88'; c.lineWidth = active ? 2 : 1; c.stroke();
-      for (const rail of [x + 9, x + width - 9]) this.line([{ x: rail, y: 216 }, { x: rail, y: 488 }], '#c4f6ff18', 2);
-      this.round(x + 12, 477, width - 24, 19, 8); c.fillStyle = '#6ec15b22'; c.fill();
-      for (let i = 0; i < 4; i++) this.ellipse(x + 29 + i * 30, 485 + Math.sin(i) * 2, 3 + i % 2, 3, '#9ff79a44');
-    }
-    GUN_X.forEach((x, i) => {
-      const y = this.launcherY(BASES[i]), color = COLORS[BASES[i]];
-      c.save(); c.translate(x, y); c.scale(SHOOTER_SCALE, SHOOTER_SCALE * this.aspectCorrection); c.translate(-x, -y);
-      const active = this.controls.selected.includes(BASES[i]) || !!this.controls.flight?.pair.includes(BASES[i]);
-      if (active) {
-        c.save();
-        const halo = c.createRadialGradient(x, y, 22, x, y, 62);
-        halo.addColorStop(0, `${color}88`); halo.addColorStop(.65, `${color}45`); halo.addColorStop(1, `${color}00`);
-        this.ellipse(x, y, 62, 62, halo);
-        c.shadowColor = color; c.shadowBlur = 24;
-        this.ellipse(x, y, 50, 50, '#ffffff08', color);
-        c.shadowBlur = 0;
-        c.strokeStyle = '#ffffff'; c.lineWidth = 3;
-        c.beginPath(); c.arc(x, y, 46, -.7, .7); c.stroke();
-        c.beginPath(); c.arc(x, y, 46, Math.PI - .7, Math.PI + .7); c.stroke();
-        c.restore();
-      }
-      c.save(); c.translate(x, y);
-      c.shadowColor = color; c.shadowBlur = active ? 18 : 4;
-      c.fillStyle = active ? '#234a50' : '#142635'; c.strokeStyle = color; c.lineWidth = 2;
-      // Four original illustrated bio-machines: shell, spore, claw, and gas sac.
-      if (i === 0) {
-        c.beginPath(); c.moveTo(0, -44); c.lineTo(42, -13); c.lineTo(32, 32);
-        c.lineTo(0, 44); c.lineTo(-32, 32); c.lineTo(-42, -13); c.closePath(); c.fill(); c.stroke();
-        for (const side of [-1, 1]) this.line([{ x: side * 25, y: -18 }, { x: side * 32, y: 15 }], color, 4);
-      } else if (i === 1) {
-        for (let j = 0; j < 6; j++) {
-          const angle = j * Math.PI / 3;
-          this.ellipse(Math.cos(angle) * 31, Math.sin(angle) * 31, 15, 15, '#412745', color);
-        }
-        this.ellipse(0, 0, 31, 32, '#23233b', color);
-      } else if (i === 2) {
-        this.round(-40, -34, 80, 68, 19); c.fill(); c.stroke();
-        for (const side of [-1, 1]) {
-          this.line([{ x: side * 27, y: -22 }, { x: side * 42, y: -44 }, { x: side * 17, y: -39 }], color, 5);
-          this.ellipse(side * 28, 25, 8, 5, '#80f5ff');
-        }
-      } else {
-        this.ellipse(-18, 7, 27, 31, '#34274b', color);
-        this.ellipse(17, 1, 28, 40, '#34274b', color);
-        for (let j = 0; j < 3; j++) this.ellipse(-25 + j * 18, -29 - j * 6, 5 + j, 5 + j, '#d8bdff', color);
-      }
-      c.shadowBlur = 0;
-      const angle = this.controls.target !== null ? this.angles[i] : i < 2 ? 0 : Math.PI;
-      c.save(); c.rotate(angle);
-      this.round(22, -12, 52, 24, i === 3 ? 12 : 5); c.fillStyle = '#294454'; c.fill(); c.strokeStyle = color; c.stroke();
-      c.fillStyle = color;
-      if (i === 1) { c.fillRect(55, -17, 9, 34); c.fillRect(70, -17, 9, 34); }
-      else if (i === 2) { this.ellipse(71, -11, 9, 8, color); this.ellipse(71, 11, 9, 8, color); }
-      else { this.ellipse(73, 0, 9, i === 3 ? 18 : 14, color); }
-      c.restore();
-      this.ellipse(0, 0, 22, 24, active ? color : '#0a1523', active ? '#ffffff' : color);
-      this.text(BASES[i], 0, 10, 30, active ? '#071321' : color, 'center', false);
-      c.restore(); c.restore();
-    });
   }
   private drawShot(): void {
     const flight = this.controls.flight; if (!flight) return;

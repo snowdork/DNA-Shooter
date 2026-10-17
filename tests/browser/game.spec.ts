@@ -22,11 +22,10 @@ async function monitorAudio(page: Page): Promise<void> {
 }
 
 async function placeBase(page: Page, base: string, position: 0 | 1): Promise<void> {
-  await page.locator(`[data-base=${base}]`).click();
-  await page.locator(`[data-side=${['A', 'T'].includes(base) ? 'at' : 'cg'}][data-position="${position}"]`).click();
+  if (position === 0) await page.locator(`[data-pair=${({ A: 'AT', T: 'TA', C: 'CG', G: 'GC' } as Record<string, string>)[base]}]`).click();
 }
 
-test('ordered side shooters fire, reject mismatches, and restart', async ({ page }) => {
+test('ordered pairs fire, directions pause, and restart clears progress', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await monitorAudio(page);
@@ -38,18 +37,15 @@ test('ordered side shooters fire, reject mismatches, and restart', async ({ page
   await expect(page.locator('#directions-dialog')).toContainText(`${TOTAL_SEGMENTS} quadra-chromes`);
   await expect(page.locator('#pause')).toHaveText('Resume creating');
   await page.keyboard.press('a');
-  await expect(page.locator('[data-base=A]')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('[data-pair=AT]')).toHaveAttribute('aria-pressed', 'false');
   await page.getByRole('button', { name: 'Back to game' }).click();
   await expect(page.locator('#directions-dialog')).not.toBeVisible();
   await expect(page.locator('#pause')).toHaveText('Pause');
   await placeBase(page, 'A', 0);
-  await page.locator('[data-base=C]').click();
-  await page.locator('[data-side=at][data-position="1"]').click();
-  await expect(page.locator('#notice')).toContainText('Use A or T');
   await placeBase(page, 'T', 1);
   await page.waitForTimeout(2200);
   await expect(page.locator('#score')).toHaveText('0');
-  await expect(page.locator('#notice')).toContainText(/click an empty quadra-chrome chain/i);
+  await expect(page.locator('#notice')).toContainText(/click a chain/i);
   const canvas = await page.locator('#field canvas').boundingBox();
   await page.mouse.click(canvas!.x + canvas!.width * 300 / 1280, canvas!.y + canvas!.height * 150 / 650);
   await expect(page.locator('#score')).toHaveText('100');
@@ -89,7 +85,7 @@ for (const reduced of [false, true]) {
     await page.locator('#load').setInputFiles({ name: 'celebration.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ version: 1, seed: 42, mutationVersion: 2, placements })) });
     await page.locator('#pause').click();
     await page.waitForTimeout(1800); // Bring all four pairs into view before the last shot.
-    await page.keyboard.press('g'); await page.keyboard.press('c'); await page.keyboard.press('4');
+    await page.keyboard.press('g'); await page.keyboard.press('4');
     await expect(page.locator('#score')).toHaveText('800');
     await page.locator('#pause').click();
     await expect(page.locator('.game-area')).toHaveAttribute('data-completion-phase', 'celebrating');
@@ -132,7 +128,6 @@ test('restore and complete the final quadra-chrome, then export', async ({ page 
   await page.locator('#motion').check();
   await page.locator('#pause').click();
   await page.keyboard.press('t');
-  await page.keyboard.press('a');
   await page.keyboard.press('4');
   await expect(page.locator('#score')).toHaveText((TOTAL_SEGMENTS * 800).toLocaleString('en-US'));
   await expect(page.locator('#count')).toHaveText(String(TOTAL_SEGMENTS));
@@ -164,17 +159,17 @@ for (const [filledSlot, missingSlot] of [[0, 3], [3, 2]] as const) {
     await page.goto('/'); await expect(page.locator('#field canvas')).toBeVisible();
     await page.locator('#motion').check(); await page.locator('#sound').click();
     await page.locator('#pause').click();
-    await page.keyboard.press('a'); await page.keyboard.press('t'); await page.keyboard.press(String(filledSlot + 1));
+    await page.keyboard.press('a'); await page.keyboard.press(String(filledSlot + 1));
     await expect(page.locator('#score')).toHaveText('100');
     const pairs = Array(4).fill('--'); pairs[filledSlot] = 'AT';
     await expect(page.locator('.dna-row').first().locator('.dna-pair')).toHaveText(pairs);
     await expect(page.locator('#notice')).toContainText(`empty chain ${missingSlot + 1} of the quadra-chrome reached the bottom`, { timeout: 60000 });
     await expect(page.locator('#pause')).toBeDisabled();
-    await expect(page.locator('[data-base=A]')).toBeDisabled();
+    await expect(page.locator('[data-pair=AT]')).toBeDisabled();
     await expect(page.locator('#score')).toHaveText('100');
     await expect(page.locator('#progress')).toHaveText(`1 / ${TOTAL_SEGMENTS}`);
     await expect(page.locator('.dna-row').first().locator('.dna-pair')).toHaveText(pairs);
-    await page.keyboard.press('c'); await page.keyboard.press('g'); await page.keyboard.press('2');
+    await page.keyboard.press('c'); await page.keyboard.press('2');
     await expect(page.locator('#score')).toHaveText('100');
     await page.locator('#restart').click();
     await expect(page.locator('#pause')).toBeEnabled();
@@ -193,7 +188,7 @@ test('sound starts with play, responds to shots, and silences on mute and pause'
   await page.locator('#pause').click();
   await expect.poll(() => page.evaluate(() => (window as any).audioProbe.contexts[0]?.state)).toBe('running');
   const before = await page.evaluate(() => (window as any).audioProbe.tones);
-  await page.keyboard.press('a'); await page.keyboard.press('t');
+  await page.keyboard.press('a');
   await page.keyboard.press('1');
   await expect(page.locator('#score')).toHaveText('100');
   expect(await page.evaluate(() => (window as any).audioProbe.tones)).toBeGreaterThan(before);
@@ -202,7 +197,7 @@ test('sound starts with play, responds to shots, and silences on mute and pause'
   await expect(page.locator('#sound')).toHaveAttribute('aria-pressed', 'false');
   await expect.poll(() => page.evaluate(() => (window as any).audioProbe.contexts[0].state)).toBe('suspended');
   const muted = await page.evaluate(() => (window as any).audioProbe.tones);
-  await page.keyboard.press('c'); await page.keyboard.press('g');
+  await page.keyboard.press('c');
   await page.keyboard.press('2');
   await expect(page.locator('#score')).toHaveText('200');
   expect(await page.evaluate(() => (window as any).audioProbe.tones)).toBe(muted);
@@ -216,34 +211,6 @@ test('sound starts with play, responds to shots, and silences on mute and pause'
   expect(errors).toEqual([]);
 });
 
-test('shooters stay fixed while explicitly placed labels follow the UP and DOWN slots', async ({ page }) => {
-  await page.goto('/'); await expect(page.locator('#field canvas')).toBeVisible();
-  await page.locator('#pause').click();
-  const g = page.locator('[data-base=G]'), c = page.locator('[data-base=C]');
-  const originalG = await g.boundingBox(), originalC = await c.boundingBox();
-  await g.click();
-  await expect(page.locator('#order-cg .slot-letter').first()).toHaveText('-');
-  await expect(g.locator('.position-label')).toHaveText('PLACE');
-  await g.click();
-  await expect(g).toHaveAttribute('aria-pressed', 'false');
-  await placeBase(page, 'G', 1);
-  await expect(page.locator('#order-cg .pair-state')).toHaveText('PICK UP');
-  await expect(page.locator('#order-cg')).toHaveAttribute('data-ready', 'false');
-  await placeBase(page, 'C', 0);
-  await expect(c.locator('.position-label')).toHaveText('↑ UP');
-  await expect(g.locator('.position-label')).toHaveText('↓ DOWN');
-  expect(await g.boundingBox()).toEqual(originalG); expect(await c.boundingBox()).toEqual(originalC);
-  await page.keyboard.press('1'); await expect(page.locator('#score')).toHaveText('100');
-  await expect(g.locator('.position-label')).toBeHidden();
-  await placeBase(page, 'G', 0); await placeBase(page, 'C', 1);
-  await page.keyboard.press('2'); await expect(page.locator('#score')).toHaveText('200');
-  await placeBase(page, 'T', 0);
-  await expect(page.locator('[data-base=T] .position-label')).toHaveText('↑ UP');
-  expect((await page.locator('[data-base=T]').boundingBox())!.y).toBe((await page.locator('[data-base=A]').boundingBox())!.y);
-  await page.locator('#motion').check(); await page.locator('#pause').click();
-  await page.screenshot({ path: '/tmp/mutagon-order.png', fullPage: true });
-});
-
 test('each landed pair immediately mutates the organism and restores its trait history', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#field canvas')).toBeVisible();
@@ -254,7 +221,7 @@ test('each landed pair immediately mutates the organism and restores its trait h
   let previousSpecimen = await page.screenshot({ clip: specimenClip });
   const traits: string[] = [];
   for (const slot of ['1', '2', '3']) {
-    await page.keyboard.press('a'); await page.keyboard.press('t');
+    await page.keyboard.press('a');
     await page.keyboard.press(slot);
     await expect(page.locator('#mutation-count')).toHaveText(slot);
     const trait = (await page.locator('#mutations li').last().textContent())!;
@@ -269,7 +236,7 @@ test('each landed pair immediately mutates the organism and restores its trait h
   await page.screenshot({ path: '/tmp/mutagon-live.png', fullPage: true });
   const downloadPromise = page.waitForEvent('download'); await page.locator('#save').click();
   const saved = await readFile((await (await downloadPromise).path())!, 'utf8');
-  expect(JSON.parse(saved).mutationVersion).toBe(3);
+  expect(JSON.parse(saved).mutationVersion).toBe(5);
   await page.locator('#restart').click();
   await page.locator('#load').setInputFiles({ name: 'random-mutations.json', mimeType: 'application/json', buffer: Buffer.from(saved) });
   await expect(page.locator('#mutations li')).toHaveText(traits);
@@ -280,7 +247,7 @@ test('each landed pair immediately mutates the organism and restores its trait h
   await page.screenshot({ path: '/tmp/mutagon-evolved.png', fullPage: true });
 });
 
-test('laptop viewports keep the enlarged field, controls, and shooter hit areas aligned', async ({ page }) => {
+test('laptop viewports keep the field, pair letters, and controls aligned', async ({ page }) => {
   test.setTimeout(60000);
   await page.goto('/');
   await expect(page.locator('#field canvas')).toBeVisible();
@@ -308,8 +275,16 @@ test('laptop viewports keep the enlarged field, controls, and shooter hit areas 
     const canvasArea = (await page.locator('.game-area').boundingBox())!;
     expect(tracker.x).toBeGreaterThan(canvasArea.x + canvasArea.width);
     expect(await page.locator('.dna-log').evaluate(el => el.scrollHeight - el.clientHeight)).toBeLessThan(2);
-    const shooter = (await page.locator('[data-base=A]').boundingBox())!;
-    expect(Math.abs(shooter.width - shooter.height)).toBeLessThan(1);
+    for (const pair of ['TA', 'AT', 'CG', 'GC']) {
+      const button = page.locator(`[data-pair=${pair}]`);
+      const bounds = (await button.boundingBox())!;
+      for (const letter of await button.locator('.pair-letters > span').all()) {
+        const box = (await letter.boundingBox())!;
+        expect(box.x).toBeGreaterThanOrEqual(bounds.x);
+        expect(box.x + box.width).toBeLessThanOrEqual(bounds.x + bounds.width);
+        expect(await letter.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThan(2);
+      }
+    }
     expect((await page.locator('.field-wrap').boundingBox())!.width).toBeGreaterThan(width * .95);
     await page.locator('#restart').click();
     await page.waitForTimeout(2200);
@@ -337,7 +312,7 @@ test('a fresh blob wiggles, pause freezes it, and restart restores its original 
   await page.waitForTimeout(250);
   expect((await page.screenshot({ clip })).equals(paused)).toBe(true);
   await page.locator('#pause').click();
-  await page.keyboard.press('a'); await page.keyboard.press('t'); await page.keyboard.press('1');
+  await page.keyboard.press('a'); await page.keyboard.press('1');
   await expect(page.locator('#mutation-count')).toHaveText('1');
   await page.evaluate(() => {
     document.querySelector<HTMLButtonElement>('#restart')!.click();
@@ -348,63 +323,6 @@ test('a fresh blob wiggles, pause freezes it, and restart restores its original 
   await page.screenshot({ path: '/tmp/mutagon-fresh-blob.png' });
 });
 
-test('side stations preview dragged pairs, reject bad drops, clear, and fire manually', async ({ page }) => {
-  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  await page.goto('/'); await expect(page.locator('#field canvas')).toBeVisible();
-  const up = page.locator('[data-side=cg][data-position="0"]');
-  const down = page.locator('[data-side=cg][data-position="1"]');
-  const g = page.locator('[data-base=G]'), c = page.locator('[data-base=C]');
-  await expect(up).toBeDisabled();
-  await page.locator('#motion').check(); await page.locator('#pause').click();
-  await c.dragTo(down);
-  await expect(down.locator('.slot-letter')).toHaveText('C');
-  await expect(up.locator('.slot-letter')).toHaveText('-');
-  await expect(page.locator('#score')).toHaveText('0');
-  await page.locator('[data-clear=cg]').click();
-  await g.dragTo(up);
-  await expect(up.locator('.slot-letter')).toHaveText('G');
-  await page.locator('[data-base=A]').dragTo(down);
-  await expect(page.locator('#notice')).toContainText('Use C or G');
-  await g.dragTo(down);
-  await expect(page.locator('#notice')).toContainText('G pairs with C');
-  await expect(down.locator('.slot-letter')).toHaveText('-');
-  await c.dragTo(down);
-  await expect(page.locator('#order-cg .pair-state')).toHaveText('READY');
-  await expect(page.locator('#order-cg')).toHaveAttribute('data-ready', 'true');
-  await expect(page.locator('#order-at')).toHaveAttribute('data-ready', 'false');
-  expect(await page.locator('#order-cg').evaluate(el => getComputedStyle(el, '::before').animationName)).toBe('none');
-  await page.locator('#motion').uncheck();
-  expect(await page.locator('#order-cg').evaluate(el => getComputedStyle(el, '::before').animationName)).toBe('pair-ready-glow');
-  await page.screenshot({ path: '/tmp/mutagon-ready-slime.png' });
-  await page.locator('#pause').click();
-  await expect(page.locator('#order-cg')).toHaveAttribute('data-ready', 'false');
-  await page.locator('#pause').click();
-  await expect(page.locator('#order-cg')).toHaveAttribute('data-ready', 'true');
-  await page.locator('#motion').check();
-  await expect(down.locator('.slot-letter')).toHaveText('C');
-  await expect(page.locator('#score')).toHaveText('0');
-  await page.locator('[data-clear=cg]').click();
-  await expect(up.locator('.slot-letter')).toHaveText('-');
-  await expect(down.locator('.slot-letter')).toHaveText('-');
-  await placeBase(page, 'A', 0);
-  await page.locator('[data-clear=cg]').click();
-  await expect(page.locator('#order-at .slot-letter').first()).toHaveText('A');
-  await page.locator('[data-clear=at]').click();
-  await g.dragTo(up); await c.dragTo(down);
-  await page.keyboard.press('1');
-  await expect(page.locator('#score')).toHaveText('100');
-  await expect(page.locator('#mutations')).toContainText('GC');
-  await expect(page.locator('#order-cg')).toHaveAttribute('data-ready', 'false');
-  await c.click(); await up.click(); await g.click(); await down.click();
-  await expect(up.locator('.slot-letter')).toHaveText('C');
-  await expect(down.locator('.slot-letter')).toHaveText('G');
-  await expect(page.locator('#order-cg .pair-state')).toHaveText('READY');
-  await page.locator('#pause').click();
-  await page.screenshot({ path: '/tmp/mutagon-stations.png' });
-  await expect(page.locator('.base-drag')).toHaveCount(0);
-  expect(errors).toEqual([]);
-});
-
 test('sparks, tusks, and snozzle grow on hits and the full animal catalog restores', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto('/'); await expect(page.locator('#field canvas')).toBeVisible();
@@ -412,12 +330,12 @@ test('sparks, tusks, and snozzle grow on hits and the full animal catalog restor
   const placements = Array.from({ length: 3 }, (_, i) => ({ segment: 0, slot: i, pair: 'AT' }));
   await page.locator('#load').setInputFiles({ name: 'animal-start.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ version: 1, seed: 42, mutationVersion: 2, placements })) });
   await page.locator('#pause').click();
-  await page.keyboard.press('g'); await page.keyboard.press('c'); await page.keyboard.press('4');
+  await page.keyboard.press('g'); await page.keyboard.press('4');
   await expect(page.locator('#notice')).toContainText('sparks');
   await expect(page.locator('#mutation-count')).toHaveText('4');
   await expect(page.locator('#notice')).toContainText('New quadra-chrome approaching');
   for (const [slot, trait] of [['1', 'tusks'], ['2', 'snozzle']]) {
-    await page.keyboard.press('g'); await page.keyboard.press('c'); await page.keyboard.press(slot);
+    await page.keyboard.press('g'); await page.keyboard.press(slot);
     await expect(page.locator('#notice')).toContainText(trait);
   }
   await page.locator('#pause').click();
@@ -430,129 +348,9 @@ test('sparks, tusks, and snozzle grow on hits and the full animal catalog restor
   expect(errors).toEqual([]);
 });
 
-test('clicking a base requires a slot click and a complete pair before populating a chain', async ({ page }) => {
-  await page.goto('/'); await expect(page.locator('#field canvas')).toBeVisible();
-  await page.locator('#motion').check(); await page.locator('#pause').click();
-  const up = page.locator('[data-side=cg][data-position="0"]');
-  const down = page.locator('[data-side=cg][data-position="1"]');
-  await page.locator('[data-base=G]').click();
-  await page.locator('[data-base=C]').click();
-  await expect(up.locator('.slot-letter')).toHaveText('-');
-  await expect(down.locator('.slot-letter')).toHaveText('-');
-  await page.keyboard.press('1'); await expect(page.locator('#score')).toHaveText('0');
-  await down.click();
-  await expect(down.locator('.slot-letter')).toHaveText('C');
-  await expect(page.locator('#order-cg .pair-state')).toHaveText('PICK UP');
-  await page.keyboard.press('1'); await expect(page.locator('#score')).toHaveText('0');
-  await page.locator('[data-base=G]').click(); await up.click();
-  await expect(up.locator('.slot-letter')).toHaveText('G');
-  await expect(page.locator('#order-cg .pair-state')).toHaveText('READY');
-  await expect(page.locator('#score')).toHaveText('0');
-  await page.waitForTimeout(2200);
-  const canvas = (await page.locator('#field canvas').boundingBox())!;
-  await page.mouse.click(canvas.x + canvas.width * 380 / 1280, canvas.y + canvas.height * 150 / 650);
-  await expect(page.locator('#score')).toHaveText('100');
-  await expect(page.locator('#mutations')).toContainText('GC');
-  await expect(up.locator('.slot-letter')).toHaveText('-');
-  await expect(down.locator('.slot-letter')).toHaveText('-');
-});
-
-test('station outline starts on the first pick and stays until both bases are deselected', async ({ page }) => {
-  await page.goto('/'); await expect(page.locator('#field canvas')).toBeVisible();
-  await page.locator('#pause').click();
-  const station = page.locator('.station-cg');
-  const g = page.locator('[data-base=G]'), c = page.locator('[data-base=C]');
-  await expect(station).toHaveAttribute('data-active', 'false');
-  await g.click(); await expect(station).toHaveAttribute('data-active', 'true');
-  await expect(page.locator('.station-at')).toHaveAttribute('data-active', 'false');
-  await g.click(); await expect(station).toHaveAttribute('data-active', 'false');
-  await placeBase(page, 'G', 0); await placeBase(page, 'C', 1);
-  await expect(station).toHaveAttribute('data-active', 'true');
-  await g.click();
-  await expect(page.locator('#order-cg .slot-letter').first()).toHaveText('-');
-  await expect(page.locator('#order-cg .slot-letter').last()).toHaveText('C');
-  await expect(station).toHaveAttribute('data-active', 'true');
-  await c.click(); await expect(station).toHaveAttribute('data-active', 'false');
-  await placeBase(page, 'C', 1);
-  await page.locator('[data-side=cg][data-position="1"]').click();
-  await expect(station).toHaveAttribute('data-active', 'false');
-  await expect(page.locator('#score')).toHaveText('0');
-});
-
-test('filled holders undo by click or drag back and invalid return drops preserve the pair', async ({ page }) => {
-  await page.goto('/'); await expect(page.locator('#field canvas')).toBeVisible();
-  await page.locator('#pause').click();
-  const up = page.locator('[data-side=cg][data-position="0"]');
-  const down = page.locator('[data-side=cg][data-position="1"]');
-  const station = page.locator('.station-cg');
-  await expect(up.locator('.slot-letter')).toHaveText('-');
-  await expect(down.locator('.slot-letter')).toHaveText('-');
-  await placeBase(page, 'G', 0); await placeBase(page, 'C', 1);
-  await up.dragTo(page.locator('[data-base=A]'));
-  await expect(up.locator('.slot-letter')).toHaveText('G');
-  await expect(down.locator('.slot-letter')).toHaveText('C');
-  await up.dragTo(page.locator('[data-base=G]'));
-  await expect(up.locator('.slot-letter')).toHaveText('-');
-  await expect(down.locator('.slot-letter')).toHaveText('C');
-  await expect(station).toHaveAttribute('data-active', 'true');
-  await down.dragTo(page.locator('[data-base=C]'));
-  await expect(down.locator('.slot-letter')).toHaveText('-');
-  await expect(station).toHaveAttribute('data-active', 'false');
-  await placeBase(page, 'G', 0); await up.click();
-  await expect(up.locator('.slot-letter')).toHaveText('-');
-  await expect(station).toHaveAttribute('data-active', 'false');
-  await expect(page.locator('#score')).toHaveText('0');
-  await expect(page.locator('.base-drag')).toHaveCount(0);
-  await expect(page.locator('[data-return-hover]')).toHaveCount(0);
-  await page.screenshot({ path: '/tmp/mutagon-empty-holders.png' });
-});
-
-test('ready pairs drag into empty chains, preserve order, and survive invalid or occupied drops', async ({ page }) => {
-  test.setTimeout(60000);
-  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  await page.goto('/'); await expect(page.locator('#field canvas')).toBeVisible();
-  await page.locator('#motion').check();
-  for (const [width, height, side, pair, holder] of [[1366, 768, 'at', 'AT', false], [2560, 1080, 'cg', 'GC', true]] as const) {
-    await page.setViewportSize({ width, height }); await page.locator('#restart').click();
-    const started = Date.now();
-    await page.waitForTimeout(2200);
-    await placeBase(page, pair[0], 0); await placeBase(page, pair[1], 1);
-    const source = page.locator(holder ? `[data-side=${side}][data-position="0"]` : `#order-${side} .pair-state`);
-    const canvas = (await page.locator('#field canvas').boundingBox())!;
-    const drop = async (x: number, y: number, valid: boolean) => {
-      const bounds = (await source.boundingBox())!;
-      await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-      await page.mouse.down();
-      // Follow the slow stream instead of assuming the same rung stays at a fixed screen coordinate.
-      const streamOffset = Math.max(0, (Date.now() - started) / 1000 - 290 / 170) * 6;
-      await page.mouse.move(canvas.x + canvas.width * x / 1280, canvas.y + canvas.height * (y + (x === 380 ? streamOffset : 0)) / 650, { steps: 12 });
-      await expect(page.locator('.pair-drag')).toHaveText(await page.locator(`#order-${side} .slot-letter`).allTextContents().then(letters => letters.join('')));
-      await expect(page.locator('.pair-drag')).toHaveAttribute('data-valid', String(valid));
-      if (valid) await page.screenshot({ path: `/tmp/mutagon-pair-drop-${side}.png` });
-      await page.mouse.up();
-      await expect(page.locator('.base-drag')).toHaveCount(0);
-    };
-    await drop(1010, 330, false);
-    await expect(page.locator('#score')).toHaveText('0');
-    await expect(page.locator(`#order-${side}`)).toHaveAttribute('data-ready', 'true');
-    await drop(380, 130, true);
-    await expect(page.locator('#score')).toHaveText('100');
-    await expect(page.locator('#mutations')).toContainText(pair);
-    await expect(page.locator(`#order-${side} .slot-letter`)).toHaveText(['-', '-']);
-    await placeBase(page, pair[1], 0); await placeBase(page, pair[0], 1);
-    await drop(380, 130, false);
-    await expect(page.locator('#score')).toHaveText('100');
-    await expect(page.locator(`#order-${side}`)).toHaveAttribute('data-ready', 'true');
-    await drop(380, 218, true);
-    await expect(page.locator('#score')).toHaveText('200');
-    await expect(page.locator('#mutations')).toContainText(pair[1] + pair[0]);
-  }
-  expect(errors).toEqual([]);
-});
-
 test.describe('touch pair dragging', () => {
   test.use({ hasTouch: true });
-  test('partial pairs cannot fire and a completed pair drops onto a chain with touch', async ({ page }) => {
+  test('complete characters drop onto a chain with touch', async ({ page }) => {
     await page.goto('/'); await expect(page.locator('#field canvas')).toBeVisible();
     await page.locator('#motion').check(); await page.locator('#pause').click();
     await page.waitForTimeout(2200);
@@ -565,15 +363,9 @@ test.describe('touch pair dragging', () => {
       await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: canvas.x + canvas.width * 380 / 1280, y: canvas.y + canvas.height * 150 / 650 }] });
       await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     };
-    await placeBase(page, 'C', 0);
-    await drop('[data-side=cg][data-position="0"]');
-    await expect(page.locator('#score')).toHaveText('0');
-    await expect(page.locator('[data-side=cg][data-position="0"] .slot-letter')).toHaveText('C');
-    await placeBase(page, 'G', 1);
-    await drop('#order-cg .pair-state');
+    await drop('[data-pair=CG]');
     await expect(page.locator('#score')).toHaveText('100');
     await expect(page.locator('#mutations')).toContainText('CG');
-    await expect(page.locator('#order-cg .slot-letter')).toHaveText(['-', '-']);
     await expect(page.locator('.base-drag')).toHaveCount(0);
     await session.detach();
   });
@@ -589,7 +381,7 @@ test('DNA ticker records landed pairs in chain order and resets with a new organ
   await expect(rows.first().locator('.dna-pair')).toHaveText(Array(SLOTS).fill('--'));
   await expect(rows.last()).toHaveAttribute('data-state', 'pending');
   await page.locator('#motion').check(); await page.locator('#pause').click();
-  await page.keyboard.press('g'); await page.keyboard.press('c');
+  await page.keyboard.press('g');
   await expect(rows.first().locator('.dna-pair')).toHaveText(Array(SLOTS).fill('--'));
   // Control changes should not rewrite unchanged pattern rows or restart their animations.
   await page.evaluate(() => {
@@ -604,13 +396,13 @@ test('DNA ticker records landed pairs in chain order and resets with a new organ
     });
     observer.observe(document.querySelector('.dna-log')!, { subtree: true, childList: true, attributes: true, characterData: true });
   });
-  await page.keyboard.press('Escape'); await page.keyboard.press('g'); await page.keyboard.press('c');
+  await page.keyboard.press('Escape'); await page.keyboard.press('g');
   expect(await page.evaluate(() => (window as any).trackerProbe.changedRows)).toEqual([]);
   await page.keyboard.press('3');
   await expect(page.locator('#score')).toHaveText('100');
   await expect(rows.first().locator('.dna-pair')).toHaveText(['--', '--', 'GC', '--']);
   expect(await page.evaluate(() => [...new Set((window as any).trackerProbe.changedRows)])).toEqual(['1']);
-  await page.keyboard.press('t'); await page.keyboard.press('a'); await page.keyboard.press('1');
+  await page.keyboard.press('t'); await page.keyboard.press('1');
   await expect(page.locator('#score')).toHaveText('200');
   await expect(rows.first().locator('.dna-pair')).toHaveText(['TA', '--', 'GC', '--']);
   await expect(page.locator('#dna-completed')).toHaveText('COLLECTING');
@@ -621,4 +413,53 @@ test('DNA ticker records landed pairs in chain order and resets with a new organ
   await expect(page.locator('.dna-row[data-state=complete]')).toHaveCount(0);
   await expect(rows.first()).toHaveAttribute('aria-current', 'step');
   expect(errors).toEqual([]);
+});
+
+
+test('ready-made characters select, drag directly, and clear safely', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/'); await expect(page.locator('#field canvas')).toBeVisible();
+  await expect(page.locator('[data-pair=AT]')).toBeDisabled();
+  await page.locator('#motion').check(); await page.locator('#pause').click();
+  await page.waitForTimeout(2200);
+  await page.locator('[data-pair=AT]').click();
+  await expect(page.locator('.quick-pair')).toHaveCount(4);
+  await expect(page.locator('.preview-slot, [data-base], .flip-pair')).toHaveCount(0);
+  await expect(page.locator('[data-pair=AT]')).toHaveAttribute('aria-pressed', 'true');
+  await page.mouse.click(380 / 1280 * (await page.locator('#field canvas').boundingBox())!.width + (await page.locator('#field canvas').boundingBox())!.x, 238 / 650 * (await page.locator('#field canvas').boundingBox())!.height + (await page.locator('#field canvas').boundingBox())!.y);
+  await expect(page.locator('#score')).toHaveText('100');
+  const tile = await page.locator('[data-pair=CG]').boundingBox();
+  const canvas = (await page.locator('#field canvas').boundingBox())!;
+  await page.mouse.move(tile!.x + tile!.width / 2, tile!.y + tile!.height / 2); await page.mouse.down();
+  await page.mouse.move(canvas.x + canvas.width * 380 / 1280, canvas.y + canvas.height * 150 / 650, { steps: 12 });
+  await expect(page.locator('.pair-drag')).toHaveText('CG');
+  await expect(page.locator('.pair-drag')).toHaveAttribute('data-valid', 'true');
+  await page.mouse.up(); await expect(page.locator('#score')).toHaveText('200');
+  await expect(page.locator('.dna-row').first().locator('.dna-pair').first()).toHaveText('CG');
+  await page.locator('[data-pair=GC]').click();
+  await expect(page.locator('[data-pair=GC]')).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-pair=GC]')).toHaveAttribute('aria-pressed', 'false');
+  await page.locator('#pause').click();
+  await expect(page.locator('[data-pair=GC]')).toBeDisabled();
+  expect(errors).toEqual([]);
+});
+
+
+test('completed developmental specimens remain visible when restored paused', async ({ page }) => {
+  await page.goto('/'); await expect(page.locator('#field canvas')).toBeVisible();
+  await page.locator('#motion').check();
+  const placements = Array.from({ length: TOTAL_SEGMENTS * SLOTS }, (_, i) => ({ segment: Math.floor(i / SLOTS), slot: i % SLOTS, pair: 'AT' }));
+  for (const seed of [42, 43, 44]) {
+    await page.locator('#load').setInputFiles({ name: 'mature.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ version: 1, seed, mutationVersion: 4, placements })) });
+    await expect(page.locator('#organism-count')).toHaveText('40 MUTATIONS');
+    await page.setViewportSize({ width: 1440 + seed % 3 * 20, height: 900 });
+    await page.screenshot({ path: `/tmp/mutagon-development-${seed}.png`, fullPage: true });
+    await expect.poll(() => page.locator('#field canvas').evaluate(canvas => {
+      const c = canvas as HTMLCanvasElement;
+      const pixel = c.getContext('2d')!.getImageData(c.width * 1010 / 1280, c.height * 307 / 650, 1, 1).data;
+      return pixel[0] + pixel[1] + pixel[2];
+    })).toBeGreaterThan(100);
+    await expect(page.locator('#pause')).toBeDisabled();
+  }
 });

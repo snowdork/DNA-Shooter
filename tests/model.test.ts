@@ -164,13 +164,13 @@ test('legacy saves keep both their original and expanded sequential mutation cat
   assert.equal(legacy.mutationVersion, 1);
   assert.equal(legacy.mutations[12].kind, 'eyes');
   assert.deepEqual(Creation.restore(legacy.save()).mutations, legacy.mutations);
-  assert.throws(() => Creation.restore({ ...creation.save(), mutationVersion: 4 }));
+  assert.throws(() => Creation.restore({ ...creation.save(), mutationVersion: 6 }));
 });
 
 test('random mutations vary with the seed, cover every trait, and replay exactly', () => {
   const kinds = new Set<string>(), colors = new Set<string>();
-  const first = new Creation(42), same = new Creation(42), different = new Creation(43);
-  const samples = Array.from({ length: 8 }, (_, seed) => new Creation(seed));
+  const first = new Creation(42, 3), same = new Creation(42, 3), different = new Creation(43, 3);
+  const samples = Array.from({ length: 8 }, (_, seed) => new Creation(seed, 3));
   for (let i = 0; i < TOTAL_SEGMENTS * SLOTS; i++) {
     for (const creation of [first, same, different, ...samples]) creation.place(i % 4, 'AT');
     for (const creation of samples) { kinds.add(creation.mutations[i].kind); colors.add(creation.mutations[i].color); }
@@ -182,7 +182,7 @@ test('random mutations vary with the seed, cover every trait, and replay exactly
   assert.notDeepEqual(first.mutations.map(m => [m.kind, m.color]), different.mutations.map(m => [m.kind, m.color]));
   assert.notDeepEqual(first.mutations.slice(0, TRAITS.length).map(m => m.kind), [...TRAITS]);
   assert.deepEqual(Creation.restore(JSON.parse(JSON.stringify(first.save()))), first);
-  const alternate = new Creation(42); alternate.place(0, 'TA');
+  const alternate = new Creation(42, 3); alternate.place(0, 'TA');
   assert.notDeepEqual(alternate.mutations[0], first.mutations[0]);
 });
 
@@ -235,4 +235,55 @@ test('each empty chain has its own bottom deadline, regardless of other filled c
   assert.equal(missedChain([null, null, null, 'CG'], bottom.map(y => y + 88), 580), 2);
   assert.equal(missedChain([null, 'AT', 'TA', 'CG'], bottom.map(y => y + 264), 580), 0);
   assert.equal(missedChain(['AT', 'TA', 'CG', 'GC'], bottom.map(y => y + 500), 580), null);
+});
+
+
+test('developmental specimens specialize coherently and preserve all legacy exports', () => {
+  for (let seed = 0; seed < 12; seed++) {
+    const creation = new Creation(seed, 4);
+    assert.equal(creation.mutationVersion, 4);
+    for (let i = 0; i < TOTAL_SEGMENTS * SLOTS; i++) creation.place(i % SLOTS, PAIRS[i % PAIRS.length]);
+    assert.ok(creation.mutations.slice(0, 4).every(m => ['bands', 'spots'].includes(m.kind)));
+    assert.equal(creation.mutations[4].kind, 'eyes');
+    assert.equal(creation.mutations[8].kind, ['fins', 'legs', 'wings'][seed % 3]);
+    const movements = creation.mutations.filter(m => ['fins', 'legs', 'wings'].includes(m.kind));
+    assert.ok(movements.every(m => m.kind === movements[0].kind));
+    assert.ok(new Set(creation.mutations.map(m => m.color)).size <= 2);
+    const state = creatureState(creation.mutations);
+    assert.equal(state.expressed.size, new Set(creation.mutations.map(m => m.kind)).size);
+    for (const m of state.expressed) assert.equal(m, creation.mutations.filter(next => next.kind === m.kind).at(-1));
+    assert.deepEqual(Creation.restore(JSON.parse(JSON.stringify(creation.save()))), creation);
+    for (const version of [1, 2, 3] as const) {
+      const legacy = new Creation(seed, version);
+      for (const p of creation.placements) legacy.place(p.slot, p.pair);
+      assert.deepEqual(Creation.restore(legacy.save()), legacy);
+    }
+  }
+});
+
+
+test('expanded anatomy varies across seeds and replays without changing older catalogs', () => {
+  const seen = new Set<string>();
+  for (let seed = 0; seed < 32; seed++) {
+    const creation = new Creation(seed);
+    assert.equal(creation.mutationVersion, 5);
+    for (let i = 0; i < TOTAL_SEGMENTS * SLOTS; i++) creation.place(i % SLOTS, PAIRS[i % PAIRS.length]);
+    creation.mutations.forEach(m => seen.add(m.kind));
+    assert.deepEqual(Creation.restore(JSON.parse(JSON.stringify(creation.save()))), creation);
+  }
+  for (const kind of ['hands', 'humanEars', 'nose', 'antlers', 'carapace', 'feathers', 'heart', 'lightSacs', 'eyeStalks']) assert.ok(seen.has(kind), kind);
+});
+
+
+test('modern anatomy lists are cached until a hit and express the latest trait instance', () => {
+  const creation = new Creation(19);
+  for (let i = 0; i < TOTAL_SEGMENTS * SLOTS; i++) {
+    const before = creatureState(creation.mutations);
+    assert.equal(creatureState(creation.mutations), before);
+    creation.place(i % SLOTS, 'AT');
+    const after = creatureState(creation.mutations);
+    assert.notEqual(after, before);
+    const drawn = Object.values(after.current).flat().sort((a, b) => a.id - b.id);
+    assert.deepEqual(drawn, [...after.expressed].sort((a, b) => a.id - b.id));
+  }
 });

@@ -44,11 +44,15 @@ const facts = [
   ['READING DNA', 'DNA sequencing reveals the order of bases in a DNA molecule.', 'https://www.genome.gov/about-genomics/fact-sheets/DNA-Sequencing-Fact-Sheet', '#efc6f3', 'Rockwell, serif'],
   ['LAB COPIER', 'PCR can make millions to billions of copies of a chosen DNA segment for study.', `${glossary}Polymerase-Chain-Reaction-PCR`, '#d2eaaa', 'Bahnschrift, sans-serif'],
   ['A GLOBAL PROJECT', 'The international Human Genome Project ran from 1990 to 2003.', 'https://www.genome.gov/about-genomics/educational-resources/fact-sheets/human-genome-project', '#b6ddf5', 'Charter, serif'],
+  ['TIMING IS EVERYTHING', 'Gene regulation controls when, where, and how much a gene is expressed.', `${glossary}Gene-Regulation`, '#bbdfb2', 'Georgia, serif'],
+  ['BUILDING A BODY', 'Cells multiply, specialize, communicate, and move as tissues and organs develop.', 'https://www.ncbi.nlm.nih.gov/books/NBK21046/', '#bae1e9', 'Trebuchet MS, sans-serif'],
+  ['TWO OR THREE', 'A–T base pairs form two hydrogen bonds; C–G pairs form three.', 'https://pdb101.rcsb.org/sci-art/geis-archive/gallery/geis-0542-b-dna', '#e8d6a0', 'Georgia, serif'],
+  ['GAME UNITS', 'A four-pair quadra-chrome is a Mutagon game unit, not a real chromosome or a gene.', dna, '#b9e4bf', 'system-ui, sans-serif'],
   ['SCIENCE + IMAGINATION', 'Mutagon grows instant tusks and tentacles for fun; real DNA changes do not instantly create new animal parts.', mutation, '#b8ffd0', 'system-ui, sans-serif'],
 ] as const;
 
 function factItems(): string {
-  return facts.map(([label, sentence, source, color, font]) => `<a class="science-fact" href="${source}" target="_blank" rel="noopener noreferrer" style="--fact-color:${color};--fact-font:${font}" title="Read the science at NHGRI"><span class="fact-label">${label}</span>${sentence}</a>`).join('');
+  return facts.map(([label, sentence, source, color, font]) => `<a class="science-fact" href="${source}" target="_blank" rel="noopener noreferrer" style="--fact-color:${color};--fact-font:${font}" title="Read the science source"><span class="fact-label">${label}</span>${sentence}</a>`).join('');
 }
 
 export function scienceReelMarkup(): string {

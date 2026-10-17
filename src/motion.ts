@@ -11,6 +11,7 @@ const MOVES: Record<Mutation['kind'], string> = {
   horns: 'Nodding rock', tentacles: 'Rolling squirm', scales: 'Shivering shimmy', spots: 'Jelly jiggle',
   sparks: 'Electric jitter', tusks: 'Heavy head swing', snozzle: 'Snuffling bob', paws: 'Pouncing bounce',
   ears: 'Listening twitch', whiskers: 'Sniffing shimmy', fins: 'Swimming sway', beak: 'Pecking nod',
+  hands: 'Reaching sway', humanEars: 'Listening tilt', nose: 'Sniffing bob', antlers: 'Majestic nod', carapace: 'Armored rock', feathers: 'Ruffling flutter', heart: 'Double heartbeat', lightSacs: 'Luminous pulse', eyeStalks: 'Searching sway',
   claws: 'Scuttling steps', plumes: 'Feathery flutter',
 };
 
