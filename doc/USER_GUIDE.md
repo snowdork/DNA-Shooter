@@ -2,6 +2,16 @@
 
 Mutagon is a DNA shooting game: complete 10 quadra-chromes while a caged green blob transforms into an unpredictable creature. Each quadra-chrome is one set of four complementary base-pair chains.
 
+## Your first experiment
+
+On the hosted game, open the address supplied by your administrator in a current desktop browser. A laptop or desktop with a keyboard and mouse is the best starting point. No account or installation is required.
+
+1. Click **Start experiment**.
+2. Press **A**, then **T**, then **1** to fill the first chain. Wait for the shot to land.
+3. Build another complementary pair and use **2**, **3**, and **4** for the remaining chains. Fill the lowest empty chain first when time is short.
+4. Complete all 10 quadra-chromes to win. Use **Space** to pause for a break.
+5. Use **Export creation** before leaving; refreshing or closing the page loses unsaved progress.
+
 ## Start locally
 
 Run `npm ci` on first setup, then `npm run dev` and open the local URL printed by Vite (normally http://127.0.0.1:5173). Click **Start experiment**.
@@ -24,7 +34,7 @@ Each side is a pairing station with a chromosome-style preview above its fixed, 
 
 | Control | Action |
 | --- | --- |
-| A / T / C / G | Select the complementary bases in order; then click an empty rung to fire. |
+| A / T / C / G | Select a quick pair: first key fills UP, complement fills DOWN; click a chain or use 1–4 to fire. |
 | 1 / 2 / 3 / 4 | Fire the selected pair at that rung, counting from the top. |
 | Escape | Clear selection and pending shot. |
 | Space | Pause or resume. |
@@ -55,3 +65,11 @@ Open the build through a local web server. Double-clicking `dist/index.html` ope
 ## Quadra-chrome goal configuration
 
 `TOTAL_SEGMENTS` in `src/model.ts` is the single adjustable quadra-chrome goal, currently **10**. It sets the number of model chromosomes, DNA ticker entries, progress totals, Directions goal, and victory message. Change that constant to adjust the run length and rebuild.
+
+## Troubleshooting
+
+- **Nothing fires:** start or resume the experiment, fill both holders with A/T or C/G, then choose an empty chain. Wait for an existing shot or completion animation to finish.
+- **No sound:** click Start experiment, check Sound on, and check the browser tab and device volume.
+- **Progress disappeared:** load your latest exported JSON file. There is no automatic browser or server save.
+- **Too much movement:** enable Reduced motion and pause the DNA Dispatch reel. The gameplay deadline still applies.
+- **Small controls:** use a larger window and normal browser zoom. Desktop and laptop layouts are covered by the automated checks; phone layouts have not been certified.

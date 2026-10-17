@@ -1,6 +1,6 @@
 # DNA Shooter admin guide
 
-This guide covers the current four-launcher creation prototype. See the [user guide](USER_GUIDE.md) for playing instructions or the [README](../README.md) for a quick start.
+This guide covers the current Mutagon browser game. See the [user guide](USER_GUIDE.md) for playing instructions or the [README](../README.md) for a quick start.
 
 ## Hosting model
 
@@ -10,7 +10,7 @@ There is no admin login, game server, database, server-side player account, lead
 
 ## Local setup and addresses
 
-Install Node.js and npm. `package.json` declares Node **18.19 or newer** as the minimum; use a maintained release for new installations. Run commands from the repository root. The current workspace is `/home/snowdork/dev/DNA-Shooter`; use your clone's actual path on another computer.
+Install Node.js and npm. `package.json` declares Node **18.19 or newer** as the minimum; use [Node.js 24 LTS](https://nodejs.org/en/about/previous-releases) for new installations. Node 18 is end-of-life; its declared minimum is compatibility information. Run commands from the repository root. The current workspace is `/home/snowdork/dev/DNA-Shooter`; use your clone's actual path on another computer.
 
 ```sh
 cd /home/snowdork/dev/DNA-Shooter
@@ -20,7 +20,7 @@ npm ci
 npm run dev
 ```
 
-Keep the terminal open and visit **http://127.0.0.1:5173/**, then click **Start creating**. If that port is occupied, Vite may select another: use the address printed in the terminal. Stop the server with **Ctrl+C**.
+Keep the terminal open and visit **http://127.0.0.1:5173/**, then click **Start experiment**. If that port is occupied, Vite may select another: use the address printed in the terminal. Stop the server with **Ctrl+C**.
 
 | Mode | Command | Default local address |
 |---|---|---|
@@ -73,6 +73,10 @@ For a manual check, run `npm run preview`, open its printed URL, and verify:
 4. Pause freezes the chain and projectiles. A queued, unlaunched shot is cancelled and needs a fresh fire action after resuming.
 5. Export, restart, and load restore progress and creature appearance. Loading leaves play paused.
 6. Keyboard controls, reduced motion, and resizing remain usable. With the current 10-quadra-chrome goal, a full run has 40 placements, 10 adaptations, and 8,000 points. New games begin with a small green glob and draw random mutations as it grows.
+
+## Release gate
+
+After installing Chromium, run `npm run verify` to run the model checks, typecheck, rebuild, and run browser tests against that fresh build. `CHROMIUM_PATH` also works with this command. This avoids accidentally testing an old `dist/`. See the [VPS runbook](VPS_DEPLOYMENT.md) for a concrete release upload and rollback procedure.
 
 ## Deploy to a VPS
 

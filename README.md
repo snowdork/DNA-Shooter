@@ -20,7 +20,9 @@ Drag complementary bases into the UP and DOWN holders, or click a base and then 
 
 - [User guide](doc/USER_GUIDE.md): mouse and keyboard controls, scoring, adaptations, pause/restart, export/load, and troubleshooting.
 - [Admin guide](doc/ADMIN_GUIDE.md): setup, local addresses, tests, production builds, VPS/Nginx hosting, caching, updates, rollback, and troubleshooting.
+- [VPS deployment runbook](doc/VPS_DEPLOYMENT.md): server preparation, release upload, HTTPS, cutover, and rollback.
 - [Nginx example](deploy/nginx.conf): a dedicated virtual host to adapt to your VPS and HTTPS setup.
+- [Verification report](doc/VERIFICATION.md): local checks, environment, and deployment limits.
 
 ## Development commands
 
@@ -28,6 +30,7 @@ Drag complementary bases into the UP and DOWN holders, or click a base and then 
 |---|---|
 | `npm run dev` | Local development at `http://127.0.0.1:5173/` by default. |
 | `npm test` | Creation-model and interaction-rule tests. |
+| `npm run verify` | Run model tests, rebuild, and test the fresh production build in Chromium. |
 | `npm run typecheck` | Check application TypeScript. |
 | `npm run build` | Typecheck, build `dist/`, and generate compressed `.gz` assets. |
 | `npm run preview` | Preview the build locally at `http://127.0.0.1:4173/` by default. |
